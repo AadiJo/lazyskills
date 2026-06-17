@@ -91,6 +91,11 @@ var (
 	actionBorderColor = lipgloss.Color("62")
 	runningStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 	successStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
+
+	// Metadata / Details styling
+	metaKeyStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	sectionHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	healthHeaderStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
 )
 
 type snapshotMsg struct {
@@ -133,6 +138,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncViewport()
 	case snapshotMsg:
 		m.result = msg.result
+		sortSkills(m.result.Skills)
 		m.err = msg.err
 		m.clampSelection()
 		m.pruneSelected()
@@ -682,12 +688,12 @@ func sourceDetailLines(skill *model.Skill, width int) []string {
 	if info.Source == "" {
 		return nil
 	}
-	lines := []string{wrapText("Source: "+info.Source, width)}
+	lines := []string{formatMetaLine("Source:", info.Source, width)}
 	if info.Folder != "" {
-		lines = append(lines, wrapText("Folder: "+info.Folder, width))
+		lines = append(lines, formatMetaLine("Folder:", info.Folder, width))
 	}
 	if info.Ref != "" {
-		lines = append(lines, wrapText("Ref: "+info.Ref, width))
+		lines = append(lines, formatMetaLine("Ref:", info.Ref, width))
 	}
 	return lines
 }
@@ -881,31 +887,34 @@ func (m appModel) detailLines(width int) []string {
 		titleStyle.Render(view.Name),
 		wrapText(view.Description, width),
 		"",
-		fmt.Sprintf("Scope: %s", view.Scope),
-		wrapText(fmt.Sprintf("Lock: %s", display.LockSummary(view)), width),
+		sectionHeaderStyle.Render("Metadata"),
+		formatMetaLine("Scope:", string(view.Scope), width),
+		formatMetaLine("Lock:", display.LockSummary(view), width),
 	}
 	if sourceLines := sourceDetailLines(items[m.selected], width); len(sourceLines) > 0 {
 		lines = append(lines, sourceLines...)
 	}
 	if view.CanonicalPath != "" {
-		lines = append(lines, wrapText("Canonical: "+view.CanonicalPath, width))
+		lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
 	}
 	if m.agent != "" {
-		lines = append(lines, "Agent filter: "+m.agentLabel())
+		lines = append(lines, formatMetaLine("Agent:", m.agentLabel(), width))
 	}
-	lines = append(lines, m.visibilitySummary(view)...)
-	lines = append(lines, "", "Observed")
-	for _, p := range view.Observed {
-		line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
-		if p.TargetPath != "" {
-			line += " → " + p.TargetPath
+	lines = append(lines, m.visibilitySummary(view, width)...)
+
+	if len(view.Observed) > 0 {
+		lines = append(lines, "", sectionHeaderStyle.Render("Observed Paths"))
+		for _, p := range view.Observed {
+			line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
+			if p.TargetPath != "" {
+				line += " → " + p.TargetPath
+			}
+			lines = append(lines, wrapText(line, width))
 		}
-		lines = append(lines, wrapText(line, width))
 	}
-	if len(view.HealthIssues) == 0 {
-		// no-op
-	} else {
-		lines = append(lines, "", errorStyle.Render("Health"))
+
+	if len(view.HealthIssues) > 0 {
+		lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
 		for _, issue := range view.HealthIssues {
 			line := fmt.Sprintf("- %s: %s", issue.Type, issue.Message)
 			if issue.Path != "" {
@@ -914,6 +923,7 @@ func (m appModel) detailLines(width int) []string {
 			lines = append(lines, wrapText(line, width))
 		}
 	}
+
 	if m.commands {
 		lines = append(lines, "")
 		divider := lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Render(strings.Repeat("─", max(1, width)))
@@ -922,7 +932,10 @@ func (m appModel) detailLines(width int) []string {
 		return lines
 	}
 	if view.Preview != "" {
-		lines = append(lines, "", "Preview")
+		lines = append(lines, "")
+		previewDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Repeat("─", max(1, width)))
+		lines = append(lines, previewDivider)
+		lines = append(lines, sectionHeaderStyle.Render("Preview"), "")
 		previewLines := strings.Split(view.Preview, "\n")
 		for _, line := range previewLines {
 			lines = append(lines, wrapText(line, width))
@@ -931,7 +944,7 @@ func (m appModel) detailLines(width int) []string {
 	return lines
 }
 
-func (m appModel) visibilitySummary(view display.SkillView) []string {
+func (m appModel) visibilitySummary(view display.SkillView, width int) []string {
 	if len(view.Visibility) == 0 {
 		return nil
 	}
@@ -944,13 +957,13 @@ func (m appModel) visibilitySummary(view display.SkillView) []string {
 			if visibility.Visible {
 				prefix = "can see"
 			}
-			line := fmt.Sprintf("Visibility: %s %s (%s)", visibility.Display, prefix, visibility.Reason)
+			val := fmt.Sprintf("%s %s (%s)", visibility.Display, prefix, visibility.Reason)
 			if visibility.Path != "" {
-				line += " at " + visibility.Path
+				val += " at " + visibility.Path
 			}
-			return []string{wrapText(line, max(1, m.viewport.Width))}
+			return []string{formatMetaLine("Visibility:", val, width)}
 		}
-		return []string{"Visibility: no compatibility data for " + m.agentLabel()}
+		return []string{formatMetaLine("Visibility:", "no compatibility data for "+m.agentLabel(), width)}
 	}
 	visible := 0
 	for _, visibility := range view.Visibility {
@@ -958,7 +971,8 @@ func (m appModel) visibilitySummary(view display.SkillView) []string {
 			visible++
 		}
 	}
-	return []string{fmt.Sprintf("Visibility: %d/%d supported agents", visible, len(view.Visibility))}
+	val := fmt.Sprintf("%d/%d supported agents", visible, len(view.Visibility))
+	return []string{formatMetaLine("Visibility:", val, width)}
 }
 
 func (m appModel) commandPreview(sk *model.Skill, width int) []string {
@@ -1126,20 +1140,23 @@ func (m appModel) filteredSkills() []*model.Skill {
 		}
 		out = append(out, sk)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		leftGroup := listGroupLabel(out[i])
-		rightGroup := listGroupLabel(out[j])
+	return out
+}
+
+func sortSkills(skills []*model.Skill) {
+	sort.SliceStable(skills, func(i, j int) bool {
+		leftGroup := listGroupLabel(skills[i])
+		rightGroup := listGroupLabel(skills[j])
 		if leftGroup != rightGroup {
 			return leftGroup < rightGroup
 		}
-		left := strings.ToLower(display.Skill(out[i]).Name)
-		right := strings.ToLower(display.Skill(out[j]).Name)
+		left := strings.ToLower(display.Skill(skills[i]).Name)
+		right := strings.ToLower(display.Skill(skills[j]).Name)
 		if left != right {
 			return left < right
 		}
-		return string(out[i].Scope) < string(out[j].Scope)
+		return string(skills[i].Scope) < string(skills[j].Scope)
 	})
-	return out
 }
 
 func (m appModel) agentFilters() []string {
@@ -1301,6 +1318,14 @@ func indent(s string, prefix string) string {
 		lines[i] = prefix + line
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatMetaLine(key, val string, width int) string {
+	paddedKey := fmt.Sprintf("%-12s", key)
+	wrappedVal := wrapText(val, max(1, width-13))
+	indentedVal := indent(wrappedVal, strings.Repeat(" ", 13))
+	indentedVal = strings.TrimPrefix(indentedVal, strings.Repeat(" ", 13))
+	return metaKeyStyle.Render(paddedKey) + " " + indentedVal
 }
 
 func truncate(s string, width int) string {

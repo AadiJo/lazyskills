@@ -528,7 +528,9 @@ func TestSourceAndFolderDetailsRender(t *testing.T) {
 		Name: "One", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo", SkillPath: "skills/web/SKILL.md", Ref: "main"},
 	}}}}
 	out := m.View()
-	if !strings.Contains(out, "Source: owner/repo") || !strings.Contains(out, "Folder: skills/web") || !strings.Contains(out, "Ref: main") {
+	if !strings.Contains(out, "Source:") || !strings.Contains(out, "owner/repo") ||
+		!strings.Contains(out, "Folder:") || !strings.Contains(out, "skills/web") ||
+		!strings.Contains(out, "Ref:") || !strings.Contains(out, "main") {
 		t.Fatalf("expected source/folder/ref details, got %q", out)
 	}
 }
