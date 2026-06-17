@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -41,6 +42,7 @@ type appModel struct {
 	action       int
 	confirming   bool
 	confirmInput string
+	confirmError string
 	running      bool
 	actionResult *runner.Result
 	width        int
@@ -69,6 +71,7 @@ type appLayout struct {
 const (
 	minLayoutWidth  = 40
 	minLayoutHeight = 7
+	appVersion      = "v1"
 )
 
 var (
@@ -78,6 +81,14 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	runExec       = runner.OSRunner{}.Run
+
+	// Action Mode UI Polish Styles
+	actionTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
+	activeActionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	actionNormalStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	actionBorderColor = lipgloss.Color("62")
+	runningStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
+	successStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
 )
 
 type snapshotMsg struct {
@@ -121,6 +132,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result = msg.result
 		m.err = msg.err
 		m.clampSelection()
+		m.actionResult = nil
 		m.syncViewport()
 	case actionResultMsg:
 		m.running = false
@@ -144,15 +156,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.confirming = false
 				m.confirmInput = ""
+				m.confirmError = ""
+			case "pgdown", "ctrl+d", "pgup", "ctrl+u":
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
 			case "enter":
 				return m.confirmAction()
 			case "backspace", "ctrl+h":
 				if len(m.confirmInput) > 0 {
 					m.confirmInput = m.confirmInput[:len(m.confirmInput)-1]
+					m.confirmError = ""
 				}
 			default:
 				if len(key) == 1 {
 					m.confirmInput += key
+					m.confirmError = ""
 				}
 			}
 			m.syncViewport()
@@ -160,7 +179,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.searching {
 			switch key {
-			case "esc", "enter":
+			case "esc":
+				m.search = ""
+				m.selected = 0
+				m.searching = false
+			case "enter":
 				m.searching = false
 			case "backspace", "ctrl+h":
 				if len(m.search) > 0 {
@@ -177,8 +200,26 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncViewport()
 			return m, nil
 		}
+		if !m.searching && (key == "backspace" || key == "ctrl+h") && len(m.search) > 0 {
+			m.search = m.search[:len(m.search)-1]
+			m.selected = 0
+			m.clampSelection()
+			m.actionResult = nil
+			m.syncViewport()
+			return m, nil
+		}
 
 		switch key {
+		case "esc":
+			if m.commands {
+				m.commands = false
+			} else if m.agent != "" {
+				m.agent = ""
+				m.selected = 0
+				m.action = 0
+				m.actionResult = nil
+				m.viewport.GotoTop()
+			}
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "?":
@@ -198,29 +239,41 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			m.agent = m.nextAgentFilter()
 			m.selected = 0
+			m.action = 0
+			m.actionResult = nil
+			m.viewport.GotoTop()
+		case "A":
+			m.agent = ""
+			m.selected = 0
+			m.action = 0
+			m.actionResult = nil
 			m.viewport.GotoTop()
 		case "tab", "right", "l":
 			m.filter = (m.filter + 1) % 3
 			m.selected = 0
+			m.actionResult = nil
 			m.viewport.GotoTop()
 		case "shift+tab", "left", "h":
 			m.filter = (m.filter + 2) % 3
 			m.selected = 0
+			m.actionResult = nil
 			m.viewport.GotoTop()
 		case "down", "j":
 			if m.commands {
 				m.action++
 			} else {
 				m.selected++
+				m.actionResult = nil
+				m.viewport.GotoTop()
 			}
-			m.viewport.GotoTop()
 		case "up", "k":
 			if m.commands {
 				m.action--
 			} else {
 				m.selected--
+				m.actionResult = nil
+				m.viewport.GotoTop()
 			}
-			m.viewport.GotoTop()
 		case "pgdown", "ctrl+d":
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -273,6 +326,7 @@ func (m appModel) startAction() (tea.Model, tea.Cmd) {
 	if action.RequiresConfirm {
 		m.confirming = true
 		m.confirmInput = ""
+		m.confirmError = ""
 		m.actionResult = nil
 		m.syncViewport()
 		return m, nil
@@ -287,8 +341,7 @@ func (m appModel) confirmAction() (tea.Model, tea.Cmd) {
 	}
 	action := actions[m.action]
 	if m.confirmInput != action.ConfirmValue {
-		m.actionResult = &runner.Result{Err: "confirmation did not match", ExitCode: -1}
-		m.confirming = false
+		m.confirmError = "Confirmation did not match. Try again or press Esc to cancel."
 		m.confirmInput = ""
 		m.syncViewport()
 		return m, nil
@@ -301,11 +354,30 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.actionResult = nil
 		return m, loadSnapshot(m.cwd)
 	}
+	if action.Exec.Interactive {
+		cmd := exec.Command(action.Exec.Program, action.Exec.Args...)
+		cmd.Dir = m.cwd
+		m.running = true
+		m.actionResult = nil
+		m.confirming = false
+		m.confirmInput = ""
+		m.confirmError = ""
+		m.syncViewport()
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			result := runner.Result{Program: action.Exec.Program, Args: action.Exec.Args, Cwd: m.cwd, ExitCode: 0}
+			if err != nil {
+				result.ExitCode = -1
+				result.Err = err.Error()
+			}
+			return actionResultMsg{result: result, mutates: action.Mutates}
+		})
+	}
 	spec := runner.ExecSpec{Program: action.Exec.Program, Args: action.Exec.Args, Cwd: m.cwd}
 	m.running = true
 	m.actionResult = nil
 	m.confirming = false
 	m.confirmInput = ""
+	m.confirmError = ""
 	m.syncViewport()
 	return m, func() tea.Msg {
 		result := runExec(spec)
@@ -361,6 +433,9 @@ func (m appModel) View() string {
 	leftStyle := paneStyle(layout.Left)
 	listStyle := paneStyle(layout.List)
 	detailStyle := paneStyle(layout.Detail)
+	if viewModel.commands {
+		detailStyle = detailStyle.BorderForeground(actionBorderColor)
+	}
 	left := leftStyle.Render(fitLines(viewModel.filterPane(layout.Left.ContentWidth), layout.Left.ContentHeight))
 	list := listStyle.Render(fitLines(viewModel.listPane(layout.List.ContentHeight, layout.List.ContentWidth), layout.List.ContentHeight))
 	detail := detailStyle.Render(viewModel.detailPane())
@@ -402,7 +477,7 @@ func (m appModel) filterPane(width int) string {
 		lines = append(lines, "", "Search", prompt)
 	}
 	if m.help {
-		lines = append(lines, "", "Keys", "↑/↓ j/k select", "tab scope", "a agent", "c commands", "/ search", "r refresh", "? help", "q quit")
+		lines = append(lines, "", "Keys", "↑/↓ j/k select", "tab scope", "a agent", "A all agents", "c actions", "enter run action", "/ search", "r refresh", "? help", "q quit")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -440,10 +515,12 @@ func (m appModel) listPane(height, width int) string {
 			label += " " + agentVisibilityBadge(items[i], m.agent)
 		}
 		if len(view.HealthIssues) > 0 {
-			label += fmt.Sprintf(" !%d", len(view.HealthIssues))
+			label += fmt.Sprintf(" ⚠ %d", len(view.HealthIssues))
 		}
 		if i == m.selected {
 			lines = append(lines, selectedStyle.Render(truncate(label, width)))
+		} else if len(view.HealthIssues) > 0 {
+			lines = append(lines, errorStyle.Render(truncate(label, width)))
 		} else {
 			lines = append(lines, truncate(label, width))
 		}
@@ -501,6 +578,8 @@ func (m appModel) detailLines(width int) []string {
 	}
 	if m.commands {
 		lines = append(lines, "")
+		divider := lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Render(strings.Repeat("─", max(1, width)))
+		lines = append(lines, divider)
 		lines = append(lines, m.commandPreview(items[m.selected], max(1, width-4))...)
 		return lines
 	}
@@ -545,10 +624,10 @@ func (m appModel) visibilitySummary(view display.SkillView) []string {
 }
 
 func (m appModel) commandPreview(sk *model.Skill, width int) []string {
-	lines := []string{titleStyle.Render("Actions")}
-	lines = append(lines, dimStyle.Render("j/k choose, enter run, esc cancel confirmation"))
+	lines := []string{actionTitleStyle.Render(" Actions ")}
+	lines = append(lines, dimStyle.Render("  j/k choose, enter run, c hide"))
 	if m.running {
-		lines = append(lines, "", "Running action...")
+		lines = append(lines, "", "  "+runningStyle.Render("Running action..."))
 	}
 	if m.confirming {
 		current := m.currentActions()
@@ -556,20 +635,31 @@ func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 		if len(current) > 0 && m.action < len(current) {
 			prompt = fmt.Sprintf("type %q to confirm", current[m.action].ConfirmValue)
 		}
-		lines = append(lines, "", errorStyle.Render("Confirm mutation"), prompt, "> "+compat.SanitizeMetadata(m.confirmInput))
+		lines = append(lines, "", "  "+errorStyle.Render("Confirm mutation"), "  "+prompt, "  "+dimStyle.Render("esc cancels"))
+		if m.confirmError != "" {
+			lines = append(lines, "  "+errorStyle.Render(m.confirmError))
+		}
+		lines = append(lines, "  > "+compat.SanitizeMetadata(m.confirmInput)+"_")
 	}
 	if m.actionResult != nil {
 		lines = append(lines, "")
 		lines = append(lines, m.renderActionResult(width)...)
 	}
-	for i, preview := range actions.ForSkill(sk) {
+	for i, preview := range m.currentActions() {
 		selector := "  "
 		if i == m.action {
 			selector = "› "
 		}
 		if !preview.Available {
-			lines = append(lines, "", selector+fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title)))
-			lines = append(lines, wrap(compat.SanitizeMetadata(preview.Reason), width))
+			titleText := fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title))
+			if i == m.action {
+				lines = append(lines, "", activeActionStyle.Render(selector+titleText))
+			} else {
+				lines = append(lines, "", dimStyle.Render(selector+titleText))
+			}
+			if preview.Reason != "" {
+				lines = append(lines, indent(wrap(compat.SanitizeMetadata(preview.Reason), width-2), "  "))
+			}
 			continue
 		}
 		marker := "read-only"
@@ -579,10 +669,20 @@ func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 		if preview.Dangerous {
 			marker += ", dangerous"
 		}
-		lines = append(lines, "", selector+fmt.Sprintf("%s (%s)", compat.SanitizeMetadata(preview.Title), marker))
-		lines = append(lines, truncate(compat.SanitizeMetadata(preview.Command), width))
-		if preview.Description != "" {
-			lines = append(lines, wrap(compat.SanitizeMetadata(preview.Description), width))
+
+		titleText := fmt.Sprintf("%s (%s)", compat.SanitizeMetadata(preview.Title), marker)
+		if i == m.action {
+			lines = append(lines, "", activeActionStyle.Render(selector+titleText))
+			lines = append(lines, "  "+actionNormalStyle.Render(truncate(compat.SanitizeMetadata(preview.Command), width-2)))
+			if preview.Description != "" {
+				lines = append(lines, indent(wrap(compat.SanitizeMetadata(preview.Description), width-2), "  "))
+			}
+		} else {
+			lines = append(lines, "", selector+titleText)
+			lines = append(lines, dimStyle.Render("  "+truncate(compat.SanitizeMetadata(preview.Command), width-2)))
+			if preview.Description != "" {
+				lines = append(lines, indent(dimStyle.Render(wrap(compat.SanitizeMetadata(preview.Description), width-2)), "  "))
+			}
 		}
 	}
 	return lines
@@ -593,22 +693,22 @@ func (m appModel) renderActionResult(width int) []string {
 		return nil
 	}
 	result := m.actionResult
-	status := "success"
+	status := successStyle.Render("success")
 	if result.ExitCode != 0 || result.Err != "" {
-		status = "failed"
+		status = errorStyle.Render("failed")
 	}
-	lines := []string{fmt.Sprintf("Result: %s (exit %d)", status, result.ExitCode)}
+	lines := []string{fmt.Sprintf("  Result: %s (exit %d)", status, result.ExitCode)}
 	if result.Err != "" {
-		lines = append(lines, wrap(compat.SanitizeMetadata(result.Err), width))
+		lines = append(lines, indent(wrap(compat.SanitizeMetadata(result.Err), width-2), "  "))
 	}
 	if result.Stdout != "" {
-		lines = append(lines, "stdout:", fitLines(wrapText(result.Stdout, width), 8))
+		lines = append(lines, "  stdout:", fitLines(indent(wrapText(result.Stdout, width-4), "    "), 8))
 	}
 	if result.Stderr != "" {
-		lines = append(lines, "stderr:", fitLines(wrapText(result.Stderr, width), 8))
+		lines = append(lines, "  stderr:", fitLines(indent(wrapText(result.Stderr, width-4), "    "), 8))
 	}
 	if result.Truncated {
-		lines = append(lines, dimStyle.Render("output truncated"))
+		lines = append(lines, dimStyle.Render("  output truncated"))
 	}
 	return lines
 }
@@ -616,11 +716,11 @@ func (m appModel) renderActionResult(width int) []string {
 func (m appModel) footer() string {
 	mode := ""
 	if m.searching {
-		mode = " search mode: type to filter, esc/enter to leave"
+		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("SEARCH MODE") + " : type to filter, esc/enter to leave"
 	} else if m.commands {
-		mode = " actions: enter run, c hide"
+		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render("ACTION MODE") + " : j/k choose, enter run, c hide"
 	}
-	return dimStyle.Render("LazySkills actions are guarded." + mode)
+	return dimStyle.Render("LazySkills "+appVersion) + mode
 }
 
 func (m appModel) filteredSkills() []*model.Skill {
@@ -649,22 +749,24 @@ func (m appModel) filteredSkills() []*model.Skill {
 }
 
 func (m appModel) agentFilters() []string {
-	if len(m.result.Agents) == 0 {
-		ids := []string{}
-		for _, agent := range agents.InitialAgents() {
-			if agent.Name == "universal" {
-				continue
-			}
-			ids = append(ids, agent.Name)
-		}
-		sort.Strings(ids)
-		return ids
-	}
 	observed := map[string]bool{}
 	for _, skill := range m.result.Skills {
 		for _, path := range skill.ObservedPaths {
 			observed[path.Agent] = true
 		}
+	}
+	if len(m.result.Agents) == 0 {
+		ids := make([]string, 0, len(observed))
+		for agent := range observed {
+			if agent != "" && agent != "universal" {
+				ids = append(ids, agent)
+			}
+		}
+		sort.Strings(ids)
+		if len(ids) > 0 {
+			return ids
+		}
+		return supportedAgentIDs()
 	}
 	detected, rest := []string{}, []string{}
 	for _, agent := range m.result.Agents {
@@ -679,7 +781,22 @@ func (m appModel) agentFilters() []string {
 	}
 	sort.Strings(detected)
 	sort.Strings(rest)
+	if len(detected) > 0 {
+		return detected
+	}
 	return append(detected, rest...)
+}
+
+func supportedAgentIDs() []string {
+	ids := []string{}
+	for _, agent := range agents.InitialAgents() {
+		if agent.Name == "universal" {
+			continue
+		}
+		ids = append(ids, agent.Name)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (m appModel) nextAgentFilter() string {
@@ -779,6 +896,17 @@ func wrapText(s string, width int) string {
 	}
 	s = strings.ReplaceAll(s, "\t", "    ")
 	return wordwrap.String(s, width)
+}
+
+func indent(s string, prefix string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func truncate(s string, width int) string {

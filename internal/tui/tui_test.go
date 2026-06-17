@@ -39,10 +39,10 @@ func TestErrorViewIsSanitized(t *testing.T) {
 	}
 }
 
-func TestViewRendersReadOnlyFooter(t *testing.T) {
+func TestViewRendersQuietVersionFooter(t *testing.T) {
 	m := appModel{width: 100, height: 30, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Description: "Build desc", Scope: model.ScopeProject}}}}
 	out := m.View()
-	if !strings.Contains(out, "LazySkills actions are guarded") || !strings.Contains(out, "Build") {
+	if !strings.Contains(out, "LazySkills v1") || strings.Contains(out, "actions are guarded") || !strings.Contains(out, "Build") {
 		t.Fatalf("unexpected view: %s", out)
 	}
 }
@@ -63,17 +63,32 @@ func TestNextAgentFilterCyclesThroughObservedAgents(t *testing.T) {
 		{Name: "A", ObservedPaths: []model.ObservedPath{{Agent: "opencode"}, {Agent: "cursor"}}},
 	}}}
 	first := m.nextAgentFilter()
-	if first != "adal" {
-		t.Fatalf("expected first supported agent adal, got %q", first)
+	if first != "cursor" {
+		t.Fatalf("expected first observed agent cursor, got %q", first)
 	}
 	m.agent = first
 	second := m.nextAgentFilter()
-	if second != "aider-desk" {
-		t.Fatalf("expected second supported agent aider-desk, got %q", second)
+	if second != "opencode" {
+		t.Fatalf("expected second observed agent opencode, got %q", second)
 	}
-	m.agent = "zenflow"
+	m.agent = second
 	if got := m.nextAgentFilter(); got != "" {
 		t.Fatalf("expected cycle back to all, got %q", got)
+	}
+}
+
+func TestAgentFilterCyclesDetectedAgentsBeforeSupportedFallback(t *testing.T) {
+	m := appModel{result: model.ScanResult{Agents: []model.AgentState{
+		{Name: "opencode", Display: "OpenCode", Detected: true},
+		{Name: "cursor", Display: "Cursor"},
+		{Name: "claude-code", Display: "Claude Code", Detected: true},
+	}}}
+	if got := m.agentFilters(); strings.Join(got, ",") != "claude-code,opencode" {
+		t.Fatalf("expected only detected agents in rotation, got %#v", got)
+	}
+	m = appModel{result: model.ScanResult{Agents: []model.AgentState{{Name: "opencode", Display: "OpenCode"}}}}
+	if got := m.agentFilters(); len(got) != 1 || got[0] != "opencode" {
+		t.Fatalf("expected fallback to supported agents when none detected, got %#v", got)
 	}
 }
 
@@ -88,6 +103,22 @@ func TestAgentFilterCanSelectSupportedAgentWithNoSkills(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "Claude Code") || !strings.Contains(out, "has no visible skills") {
 		t.Fatalf("expected zero-skill agent empty state, got %q", out)
+	}
+}
+
+func TestAgentFilterCanResetDirectlyToAll(t *testing.T) {
+	m := appModel{width: 100, height: 30, agent: "claude-code", result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "OpenCode Skill", Description: "desc", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}}},
+	}}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	next := updated.(appModel)
+	if next.agent != "" {
+		t.Fatalf("expected A to reset agent filter, got %q", next.agent)
+	}
+	updated, _ = appModel{agent: "claude-code", result: m.result}.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = updated.(appModel)
+	if next.agent != "" {
+		t.Fatalf("expected esc to reset agent filter when no mode is active, got %q", next.agent)
 	}
 }
 
@@ -111,6 +142,9 @@ func TestCommandPreviewModeRendersWithoutExecuting(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "Actions") || !strings.Contains(out, "Reinstall/update selected skill") || !strings.Contains(out, "skills add") || !strings.Contains(out, "--yes") {
 		t.Fatalf("expected actions in output: %q", out)
+	}
+	if strings.Contains(out, "Refresh LazySkills") {
+		t.Fatalf("refresh belongs on r key, not action list: %q", out)
 	}
 }
 
@@ -146,6 +180,20 @@ func TestAgentFilterListMarksNonVisibleSkills(t *testing.T) {
 	}
 }
 
+func TestListRendersIssueRowsInRedWithSubtleBadge(t *testing.T) {
+	m := appModel{width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "Healthy", Scope: model.ScopeProject},
+		{Name: "Problem", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Message: "missing SKILL.md"}}},
+	}}}
+	out := m.View()
+	if !strings.Contains(out, "Problem [project] ⚠ 1") {
+		t.Fatalf("expected subtle issue badge, got %q", out)
+	}
+	if strings.Contains(out, "BROKEN") {
+		t.Fatalf("issue badge should stay subtle, got %q", out)
+	}
+}
+
 func TestCommandPreviewToggle(t *testing.T) {
 	m := appModel{}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
@@ -163,7 +211,7 @@ func TestActionConfirmationCancelDoesNotExecute(t *testing.T) {
 
 	m := actionTestModel(t.TempDir())
 	m.commands = true
-	m.action = 1
+	m.action = actionIndex(t, m, "Reinstall/update selected skill")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next := updated.(appModel)
 	if cmd != nil || !next.confirming {
@@ -189,7 +237,7 @@ func TestActionExecUsesProjectCwdAndPreventsDuplicateWhileRunning(t *testing.T) 
 
 	m := actionTestModel(cwd)
 	m.commands = true
-	m.action = 1
+	m.action = actionIndex(t, m, "Reinstall/update selected skill")
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
 	for _, r := range []rune("yes") {
@@ -223,7 +271,7 @@ func TestFailedMutationDoesNotTriggerRescan(t *testing.T) {
 
 	m := actionTestModel(cwd)
 	m.commands = true
-	m.action = 1
+	m.action = actionIndex(t, m, "Reinstall/update selected skill")
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
 	for _, r := range []rune("yes") {
@@ -246,7 +294,7 @@ func TestRemoveRequiresExactTypedIdentity(t *testing.T) {
 	m := actionTestModel(t.TempDir())
 	m.result.Skills[0].CanonicalPath = "/tmp/deploy-skill"
 	m.commands = true
-	m.action = 2
+	m.action = actionIndex(t, m, "Remove selected skill")
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
 	for _, r := range []rune("wrong") {
@@ -255,8 +303,8 @@ func TestRemoveRequiresExactTypedIdentity(t *testing.T) {
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
-	if cmd != nil || m.actionResult == nil || !strings.Contains(m.actionResult.Err, "confirmation") {
-		t.Fatalf("expected failed confirmation without command, result=%#v cmd=%v", m.actionResult, cmd)
+	if cmd != nil || !m.confirming || !strings.Contains(m.confirmError, "Confirmation did not match") || m.actionResult != nil {
+		t.Fatalf("expected inline confirmation error without command, confirming=%v err=%q result=%#v cmd=%v", m.confirming, m.confirmError, m.actionResult, cmd)
 	}
 }
 
@@ -268,6 +316,60 @@ func actionTestModel(cwd string) appModel {
 		CanonicalPath: "/tmp/deploy-skill",
 		LocalLock:     &model.LocalLockEntry{Source: "owner/repo"},
 	}}}}
+}
+
+func actionIndex(t *testing.T, m appModel, title string) int {
+	t.Helper()
+	for i, action := range m.currentActions() {
+		if action.Title == title {
+			return i
+		}
+	}
+	t.Fatalf("action %q not found in %#v", title, m.currentActions())
+	return 0
+}
+
+func TestActionSelectionDoesNotResetDetailScroll(t *testing.T) {
+	m := actionTestModel(t.TempDir())
+	for i := 0; i < 40; i++ {
+		m.result.Skills[0].HealthIssues = append(m.result.Skills[0].HealthIssues, model.HealthIssue{Type: "warning", Message: fmt.Sprintf("issue %d", i)})
+	}
+	m.height = 12
+	m.commands = true
+	m.syncViewport()
+	m.viewport.SetYOffset(5)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next := updated.(appModel)
+	if next.viewport.YOffset == 0 {
+		t.Fatalf("expected action selection not to reset detail scroll to top")
+	}
+}
+
+func TestActionResultClearsOnSkillSelectionChange(t *testing.T) {
+	m := appModel{width: 120, height: 32, actionResult: &runner.Result{ExitCode: 0}, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject},
+		{Name: "Two", Scope: model.ScopeProject},
+	}}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next := updated.(appModel)
+	if next.actionResult != nil {
+		t.Fatalf("expected action result cleared on skill change")
+	}
+}
+
+func TestSearchEscapeClearsQueryAndBackspaceWorksOutsideSearch(t *testing.T) {
+	m := appModel{searching: true, search: "build", result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := updated.(appModel)
+	if next.searching || next.search != "" {
+		t.Fatalf("expected esc to clear search, searching=%v search=%q", next.searching, next.search)
+	}
+	m = appModel{searching: false, search: "abc", result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	next = updated.(appModel)
+	if next.search != "ab" {
+		t.Fatalf("expected backspace outside search to trim query, got %q", next.search)
+	}
 }
 
 func TestDetailPaneClipsLongPreview(t *testing.T) {

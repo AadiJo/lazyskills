@@ -8,6 +8,7 @@ import (
 )
 
 func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
+	t.Setenv("EDITOR", "")
 	sk := &model.Skill{
 		Name:          "Deploy Skill",
 		Scope:         model.ScopeGlobal,
@@ -35,6 +36,26 @@ func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
 	}
 	if !strings.Contains(add.Command, "owner/repo/skills/deploy#v1") {
 		t.Fatalf("expected ref and skill path preserved, got %q", add.Command)
+	}
+}
+
+func TestOpenEditorActionUsesSafeEditorAndSkillPath(t *testing.T) {
+	t.Setenv("EDITOR", "vim -n")
+	previews := ForSkill(&model.Skill{Name: "Deploy", Scope: model.ScopeProject, SkillPath: "/tmp/deploy/SKILL.md"})
+	open := previewByTitle(t, previews, "Open selected skill")
+	if !open.Available || !open.Exec.Interactive || open.Exec.Program != "vim" {
+		t.Fatalf("expected interactive editor action, got %#v", open)
+	}
+	if len(open.Exec.Args) != 2 || open.Exec.Args[0] != "-n" || open.Exec.Args[1] != "/tmp/deploy/SKILL.md" {
+		t.Fatalf("unexpected editor args: %#v", open.Exec.Args)
+	}
+}
+
+func TestOpenEditorRejectsUnsafeEditor(t *testing.T) {
+	t.Setenv("EDITOR", "vim;rm")
+	open := previewByTitle(t, ForSkill(&model.Skill{Name: "Deploy", Scope: model.ScopeProject, SkillPath: "/tmp/deploy/SKILL.md"}), "Open selected skill")
+	if open.Available {
+		t.Fatalf("expected unsafe editor unavailable: %#v", open)
 	}
 }
 

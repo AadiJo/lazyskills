@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -46,8 +47,11 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 	if resolve == nil {
 		resolve = ResolveSkillsCommand
 	}
-	previews := []CommandPreview{
-		newInternalPreview("refresh", "Refresh LazySkills", "refresh", "Rescan skills without leaving LazySkills.", false),
+	previews := []CommandPreview{}
+	if open, ok, reason := openEditorAction(sk); ok {
+		previews = append(previews, open)
+	} else {
+		previews = append(previews, unavailablePreview("Open selected skill", reason))
 	}
 
 	if addSource, skillFilter, ok, reason := addIdentity(sk); ok {
@@ -77,17 +81,42 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 	return previews
 }
 
+func openEditorAction(sk *model.Skill) (CommandPreview, bool, string) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		return CommandPreview{}, false, "$EDITOR is not set"
+	}
+	parts := strings.Fields(editor)
+	if len(parts) == 0 || !safeEditorToken(parts[0]) {
+		return CommandPreview{}, false, "$EDITOR is empty or unsafe"
+	}
+	for _, arg := range parts[1:] {
+		if !safeEditorArg(arg) {
+			return CommandPreview{}, false, "$EDITOR arguments are unsafe"
+		}
+	}
+	target := firstRawNonEmpty(sk.SkillPath, sk.CanonicalPath)
+	if target == "" {
+		return CommandPreview{}, false, "skill path is unavailable"
+	}
+	if !safeExecValue(target) {
+		return CommandPreview{}, false, "skill path contains unsafe characters"
+	}
+	args := append([]string{}, parts[1:]...)
+	args = append(args, target)
+	preview := newPreview("open_skill", "Open selected skill", parts[0], args, "Open this skill in $EDITOR. LazySkills releases the terminal while the editor runs.", false, false, false, "")
+	if !preview.Available {
+		return CommandPreview{}, false, preview.Reason
+	}
+	preview.Exec.Interactive = true
+	return preview, true, ""
+}
+
 func ResolveSkillsCommand() (string, []string) {
 	if _, err := exec.LookPath("skills"); err == nil {
 		return "skills", nil
 	}
 	return "npx", []string{"--yes", "skills"}
-}
-
-func newInternalPreview(id, title, internal, description string, mutates bool) CommandPreview {
-	preview := CommandPreview{ID: id, Title: title, Description: description, Mutates: mutates, Available: true, Exec: ExecSpec{Internal: internal}}
-	preview.Command = title
-	return preview
 }
 
 func newPreview(id, title, program string, args []string, description string, mutates, confirm, dangerous bool, confirmValue string) CommandPreview {
@@ -224,6 +253,14 @@ func safeExecValue(value string) bool {
 		return false
 	}
 	return compat.SanitizeMetadata(value) == value && !strings.ContainsAny(value, "\x00\x1b\r\n")
+}
+
+func safeEditorToken(value string) bool {
+	return safeExecValue(value) && !strings.HasPrefix(value, "-") && !strings.ContainsAny(value, "'\"$`\\!*?[]{}()&;<>|")
+}
+
+func safeEditorArg(value string) bool {
+	return safeExecValue(value) && !strings.ContainsAny(value, "'\"$`\\!*?[]{}()&;<>|")
 }
 
 func safeToken(value string) string {
