@@ -9,10 +9,10 @@ import (
 
 func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
 	sk := &model.Skill{
-		Name:          "Deploy Skill\x1b[31m",
+		Name:          "Deploy Skill",
 		Scope:         model.ScopeGlobal,
 		CanonicalPath: "/tmp/deploy-skill",
-		GlobalLock:    &model.GlobalLockEntry{Source: "owner/repo\x1b[31m", SkillPath: "skills/deploy/SKILL.md", Ref: "v1"},
+		GlobalLock:    &model.GlobalLockEntry{Source: "owner/repo", SkillPath: "skills/deploy/SKILL.md", Ref: "v1"},
 	}
 	previews := ForSkill(sk)
 	if len(previews) < 3 {
@@ -22,16 +22,65 @@ func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
 		if strings.ContainsRune(preview.Command, '\x1b') {
 			t.Fatalf("command contains escape: %#v", preview)
 		}
-		if preview.Available && preview.Program == "" {
+		if preview.Available && preview.Program == "" && preview.Exec.Internal == "" {
 			t.Fatalf("available preview missing program: %#v", preview)
 		}
 	}
 	add := previewByTitle(t, previews, "Reinstall/update selected skill")
-	if !add.Available || add.Program != "npx" || len(add.Args) == 0 {
+	if !add.Available || add.Exec.Program == "" || len(add.Exec.Args) == 0 {
 		t.Fatalf("expected structured add preview, got %#v", add)
+	}
+	if !containsArg(add.Exec.Args, "--yes") {
+		t.Fatalf("expected --yes in add args: %#v", add.Exec.Args)
 	}
 	if !strings.Contains(add.Command, "owner/repo/skills/deploy#v1") {
 		t.Fatalf("expected ref and skill path preserved, got %q", add.Command)
+	}
+}
+
+func TestUnsafeRawValuesSuppressExecActions(t *testing.T) {
+	previews := ForSkill(&model.Skill{Name: "Deploy\x1b[31m", Scope: model.ScopeProject, CanonicalPath: "/tmp/deploy", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}})
+	add := previewByTitle(t, previews, "Reinstall/update selected skill")
+	if add.Available {
+		t.Fatalf("expected unsafe raw name to suppress executable add: %#v", add)
+	}
+}
+
+func TestUnsafeRawLockFieldsSuppressExecActions(t *testing.T) {
+	cases := []struct {
+		name  string
+		skill *model.Skill
+	}{
+		{"local source", &model.Skill{Name: "Deploy", Scope: model.ScopeProject, CanonicalPath: "/tmp/deploy", LocalLock: &model.LocalLockEntry{Source: "owner/\x1b[31mrepo"}}},
+		{"local ref", &model.Skill{Name: "Deploy", Scope: model.ScopeProject, CanonicalPath: "/tmp/deploy", LocalLock: &model.LocalLockEntry{Source: "owner/repo", Ref: "main\x1b"}}},
+		{"local skill path", &model.Skill{Name: "Deploy", Scope: model.ScopeProject, CanonicalPath: "/tmp/deploy", LocalLock: &model.LocalLockEntry{Source: "owner/repo", SkillPath: "skills/\x1bdeploy/SKILL.md"}}},
+		{"global source url", &model.Skill{Name: "Deploy", Scope: model.ScopeGlobal, CanonicalPath: "/tmp/deploy", GlobalLock: &model.GlobalLockEntry{SourceURL: "https://example.com/\x1bskills"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			add := previewByTitle(t, ForSkill(tc.skill), "Reinstall/update selected skill")
+			if add.Available {
+				t.Fatalf("expected unsafe raw lock field to suppress action: %#v", add)
+			}
+		})
+	}
+}
+
+func TestResolverFallbackUsesNpxYesSkills(t *testing.T) {
+	previews := ForSkillWithResolver(&model.Skill{Name: "Deploy", Scope: model.ScopeProject, CanonicalPath: "/tmp/deploy", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}}, func() (string, []string) {
+		return "npx", []string{"--yes", "skills"}
+	})
+	add := previewByTitle(t, previews, "Reinstall/update selected skill")
+	if add.Exec.Program != "npx" || len(add.Exec.Args) < 3 || add.Exec.Args[0] != "--yes" || add.Exec.Args[1] != "skills" {
+		t.Fatalf("expected npx --yes skills fallback, got %#v", add.Exec)
+	}
+}
+
+func TestRemoveRequiresInstalledDirectoryIdentity(t *testing.T) {
+	previews := ForSkill(&model.Skill{Name: "Display Name", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}})
+	remove := previewByTitle(t, previews, "Remove selected skill")
+	if remove.Available {
+		t.Fatalf("expected remove unavailable without installed path identity: %#v", remove)
 	}
 }
 
@@ -64,6 +113,25 @@ func TestRemoveUsesInstallDirectoryIdentityNotDisplayName(t *testing.T) {
 	}
 	if strings.Contains(remove.Command, "Display Name") || !strings.Contains(remove.Command, "display-name") {
 		t.Fatalf("expected install directory target, got %q", remove.Command)
+	}
+}
+
+func TestRemoveUsesExactInstallBasenameWithoutSanitizing(t *testing.T) {
+	previews := ForSkill(&model.Skill{Name: "Display Name", Scope: model.ScopeProject, CanonicalPath: "/tmp/Exact_Name.1", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}})
+	remove := previewByTitle(t, previews, "Remove selected skill")
+	if !remove.Available {
+		t.Fatalf("expected remove available: %#v", remove)
+	}
+	if remove.ConfirmValue != "Exact_Name.1" || !containsArg(remove.Exec.Args, "Exact_Name.1") {
+		t.Fatalf("expected exact basename target, got confirm=%q args=%#v", remove.ConfirmValue, remove.Exec.Args)
+	}
+}
+
+func TestRemoveRejectsUnsafeInstallBasename(t *testing.T) {
+	previews := ForSkill(&model.Skill{Name: "Display Name", Scope: model.ScopeProject, CanonicalPath: "/tmp/bad\x1bname", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}})
+	remove := previewByTitle(t, previews, "Remove selected skill")
+	if remove.Available {
+		t.Fatalf("expected unsafe exact basename to suppress remove: %#v", remove)
 	}
 }
 
@@ -112,4 +180,13 @@ func previewByTitle(t *testing.T, previews []CommandPreview, title string) Comma
 	}
 	t.Fatalf("preview %q not found in %#v", title, previews)
 	return CommandPreview{}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }

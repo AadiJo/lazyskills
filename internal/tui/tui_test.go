@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"lazyskills/internal/model"
+	"lazyskills/internal/runner"
 )
 
 func TestFilteredSkillsUsesSanitizedSearch(t *testing.T) {
@@ -41,7 +42,7 @@ func TestErrorViewIsSanitized(t *testing.T) {
 func TestViewRendersReadOnlyFooter(t *testing.T) {
 	m := appModel{width: 100, height: 30, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Description: "Build desc", Scope: model.ScopeProject}}}}
 	out := m.View()
-	if !strings.Contains(out, "LazySkills is read-only") || !strings.Contains(out, "Build") {
+	if !strings.Contains(out, "LazySkills actions are guarded") || !strings.Contains(out, "Build") {
 		t.Fatalf("unexpected view: %s", out)
 	}
 }
@@ -108,8 +109,8 @@ func TestCommandPreviewModeRendersWithoutExecuting(t *testing.T) {
 		LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
 	}}}}
 	out := m.View()
-	if !strings.Contains(out, "Command previews") || !strings.Contains(out, "Preview only") || !strings.Contains(out, "npx skills") {
-		t.Fatalf("expected command previews in output: %q", out)
+	if !strings.Contains(out, "Actions") || !strings.Contains(out, "Reinstall/update selected skill") || !strings.Contains(out, "skills add") || !strings.Contains(out, "--yes") {
+		t.Fatalf("expected actions in output: %q", out)
 	}
 }
 
@@ -152,6 +153,121 @@ func TestCommandPreviewToggle(t *testing.T) {
 	if !next.commands {
 		t.Fatalf("expected command preview mode enabled")
 	}
+}
+
+func TestActionConfirmationCancelDoesNotExecute(t *testing.T) {
+	called := false
+	old := runExec
+	runExec = func(spec runner.ExecSpec) runner.Result { called = true; return runner.Result{ExitCode: 0} }
+	t.Cleanup(func() { runExec = old })
+
+	m := actionTestModel(t.TempDir())
+	m.commands = true
+	m.action = 1
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(appModel)
+	if cmd != nil || !next.confirming {
+		t.Fatalf("expected confirmation without command, confirming=%v cmd=%v", next.confirming, cmd)
+	}
+	updated, cmd = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = updated.(appModel)
+	if cmd != nil || next.confirming || called {
+		t.Fatalf("expected cancel without execution, confirming=%v called=%v", next.confirming, called)
+	}
+}
+
+func TestActionExecUsesProjectCwdAndPreventsDuplicateWhileRunning(t *testing.T) {
+	cwd := t.TempDir()
+	old := runExec
+	runExec = func(spec runner.ExecSpec) runner.Result {
+		if spec.Cwd != cwd {
+			t.Fatalf("expected cwd %q, got %q", cwd, spec.Cwd)
+		}
+		return runner.Result{Program: spec.Program, Args: spec.Args, Cwd: spec.Cwd, ExitCode: 0, Stdout: "ok"}
+	}
+	t.Cleanup(func() { runExec = old })
+
+	m := actionTestModel(cwd)
+	m.commands = true
+	m.action = 1
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	for _, r := range []rune("yes") {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(appModel)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if cmd == nil || !m.running {
+		t.Fatalf("expected running command")
+	}
+	updated, dup := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if dup != nil || !updated.(appModel).running {
+		t.Fatalf("expected duplicate enter ignored while running")
+	}
+	msg := cmd()
+	updated, rescan := m.Update(msg)
+	m = updated.(appModel)
+	if m.running || m.actionResult == nil || m.actionResult.Stdout != "ok" || rescan == nil {
+		t.Fatalf("expected result and rescan, model=%#v rescan=%v", m.actionResult, rescan)
+	}
+}
+
+func TestFailedMutationDoesNotTriggerRescan(t *testing.T) {
+	cwd := t.TempDir()
+	old := runExec
+	runExec = func(spec runner.ExecSpec) runner.Result {
+		return runner.Result{Program: spec.Program, Args: spec.Args, Cwd: spec.Cwd, ExitCode: 2, Stderr: "nope"}
+	}
+	t.Cleanup(func() { runExec = old })
+
+	m := actionTestModel(cwd)
+	m.commands = true
+	m.action = 1
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	for _, r := range []rune("yes") {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(appModel)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if cmd == nil {
+		t.Fatalf("expected command")
+	}
+	updated, rescan := m.Update(cmd())
+	m = updated.(appModel)
+	if rescan != nil || m.actionResult == nil || m.actionResult.ExitCode != 2 {
+		t.Fatalf("expected failed result without rescan, result=%#v rescan=%v", m.actionResult, rescan)
+	}
+}
+
+func TestRemoveRequiresExactTypedIdentity(t *testing.T) {
+	m := actionTestModel(t.TempDir())
+	m.result.Skills[0].CanonicalPath = "/tmp/deploy-skill"
+	m.commands = true
+	m.action = 2
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	for _, r := range []rune("wrong") {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(appModel)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if cmd != nil || m.actionResult == nil || !strings.Contains(m.actionResult.Err, "confirmation") {
+		t.Fatalf("expected failed confirmation without command, result=%#v cmd=%v", m.actionResult, cmd)
+	}
+}
+
+func actionTestModel(cwd string) appModel {
+	return appModel{cwd: cwd, width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:          "Deploy Skill",
+		Description:   "desc",
+		Scope:         model.ScopeProject,
+		CanonicalPath: "/tmp/deploy-skill",
+		LocalLock:     &model.LocalLockEntry{Source: "owner/repo"},
+	}}}}
 }
 
 func TestDetailPaneClipsLongPreview(t *testing.T) {

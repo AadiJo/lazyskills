@@ -15,6 +15,7 @@ import (
 	"lazyskills/internal/compat"
 	"lazyskills/internal/display"
 	"lazyskills/internal/model"
+	"lazyskills/internal/runner"
 	"lazyskills/internal/scan"
 )
 
@@ -27,19 +28,24 @@ const (
 )
 
 type appModel struct {
-	cwd       string
-	result    model.ScanResult
-	err       error
-	selected  int
-	filter    scopeFilter
-	agent     string
-	search    string
-	searching bool
-	commands  bool
-	help      bool
-	width     int
-	height    int
-	viewport  viewport.Model
+	cwd          string
+	result       model.ScanResult
+	err          error
+	selected     int
+	filter       scopeFilter
+	agent        string
+	search       string
+	searching    bool
+	commands     bool
+	help         bool
+	action       int
+	confirming   bool
+	confirmInput string
+	running      bool
+	actionResult *runner.Result
+	width        int
+	height       int
+	viewport     viewport.Model
 }
 
 type paneLayout struct {
@@ -71,11 +77,17 @@ var (
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	runExec       = runner.OSRunner{}.Run
 )
 
 type snapshotMsg struct {
 	result model.ScanResult
 	err    error
+}
+
+type actionResultMsg struct {
+	result  runner.Result
+	mutates bool
 }
 
 func Run(cwd string) error {
@@ -110,8 +122,42 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.clampSelection()
 		m.syncViewport()
+	case actionResultMsg:
+		m.running = false
+		m.confirming = false
+		m.confirmInput = ""
+		m.actionResult = &msg.result
+		m.syncViewport()
+		if msg.mutates && msg.result.ExitCode == 0 && msg.result.Err == "" {
+			return m, loadSnapshot(m.cwd)
+		}
 	case tea.KeyMsg:
 		key := msg.String()
+		if m.running {
+			if key == "ctrl+c" || key == "q" {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.confirming {
+			switch key {
+			case "esc":
+				m.confirming = false
+				m.confirmInput = ""
+			case "enter":
+				return m.confirmAction()
+			case "backspace", "ctrl+h":
+				if len(m.confirmInput) > 0 {
+					m.confirmInput = m.confirmInput[:len(m.confirmInput)-1]
+				}
+			default:
+				if len(key) == 1 {
+					m.confirmInput += key
+				}
+			}
+			m.syncViewport()
+			return m, nil
+		}
 		if m.searching {
 			switch key {
 			case "esc", "enter":
@@ -139,8 +185,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.help = !m.help
 		case "c":
 			m.commands = !m.commands
+			m.action = 0
 		case "/":
 			m.searching = true
+		case "enter":
+			if m.commands {
+				return m.startAction()
+			}
 		case "r":
 			m.viewport.GotoTop()
 			return m, loadSnapshot(m.cwd)
@@ -157,10 +208,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 			m.viewport.GotoTop()
 		case "down", "j":
-			m.selected++
+			if m.commands {
+				m.action++
+			} else {
+				m.selected++
+			}
 			m.viewport.GotoTop()
 		case "up", "k":
-			m.selected--
+			if m.commands {
+				m.action--
+			} else {
+				m.selected--
+			}
 			m.viewport.GotoTop()
 		case "pgdown", "ctrl+d":
 			var cmd tea.Cmd
@@ -174,9 +233,84 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		m.clampSelection()
+		m.clampAction()
 		m.syncViewport()
 	}
 	return m, nil
+}
+
+func (m *appModel) clampAction() {
+	actions := m.currentActions()
+	if len(actions) == 0 {
+		m.action = 0
+		return
+	}
+	if m.action < 0 {
+		m.action = 0
+	}
+	if m.action >= len(actions) {
+		m.action = len(actions) - 1
+	}
+}
+
+func (m appModel) currentActions() []actions.CommandPreview {
+	items := m.filteredSkills()
+	if len(items) == 0 || m.selected >= len(items) {
+		return nil
+	}
+	return actions.ForSkill(items[m.selected])
+}
+
+func (m appModel) startAction() (tea.Model, tea.Cmd) {
+	actions := m.currentActions()
+	if len(actions) == 0 || m.action >= len(actions) {
+		return m, nil
+	}
+	action := actions[m.action]
+	if !action.Available {
+		return m, nil
+	}
+	if action.RequiresConfirm {
+		m.confirming = true
+		m.confirmInput = ""
+		m.actionResult = nil
+		m.syncViewport()
+		return m, nil
+	}
+	return m.executeAction(action)
+}
+
+func (m appModel) confirmAction() (tea.Model, tea.Cmd) {
+	actions := m.currentActions()
+	if len(actions) == 0 || m.action >= len(actions) {
+		return m, nil
+	}
+	action := actions[m.action]
+	if m.confirmInput != action.ConfirmValue {
+		m.actionResult = &runner.Result{Err: "confirmation did not match", ExitCode: -1}
+		m.confirming = false
+		m.confirmInput = ""
+		m.syncViewport()
+		return m, nil
+	}
+	return m.executeAction(action)
+}
+
+func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.Cmd) {
+	if action.Exec.Internal == "refresh" {
+		m.actionResult = nil
+		return m, loadSnapshot(m.cwd)
+	}
+	spec := runner.ExecSpec{Program: action.Exec.Program, Args: action.Exec.Args, Cwd: m.cwd}
+	m.running = true
+	m.actionResult = nil
+	m.confirming = false
+	m.confirmInput = ""
+	m.syncViewport()
+	return m, func() tea.Msg {
+		result := runExec(spec)
+		return actionResultMsg{result: result, mutates: action.Mutates}
+	}
 }
 
 func (m *appModel) syncViewport() {
@@ -411,11 +545,30 @@ func (m appModel) visibilitySummary(view display.SkillView) []string {
 }
 
 func (m appModel) commandPreview(sk *model.Skill, width int) []string {
-	lines := []string{titleStyle.Render("Command previews")}
-	lines = append(lines, dimStyle.Render("Preview only. LazySkills will not run these commands yet."))
-	for _, preview := range actions.ForSkill(sk) {
+	lines := []string{titleStyle.Render("Actions")}
+	lines = append(lines, dimStyle.Render("j/k choose, enter run, esc cancel confirmation"))
+	if m.running {
+		lines = append(lines, "", "Running action...")
+	}
+	if m.confirming {
+		current := m.currentActions()
+		prompt := "type confirmation"
+		if len(current) > 0 && m.action < len(current) {
+			prompt = fmt.Sprintf("type %q to confirm", current[m.action].ConfirmValue)
+		}
+		lines = append(lines, "", errorStyle.Render("Confirm mutation"), prompt, "> "+compat.SanitizeMetadata(m.confirmInput))
+	}
+	if m.actionResult != nil {
+		lines = append(lines, "")
+		lines = append(lines, m.renderActionResult(width)...)
+	}
+	for i, preview := range actions.ForSkill(sk) {
+		selector := "  "
+		if i == m.action {
+			selector = "› "
+		}
 		if !preview.Available {
-			lines = append(lines, "", fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title)))
+			lines = append(lines, "", selector+fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title)))
 			lines = append(lines, wrap(compat.SanitizeMetadata(preview.Reason), width))
 			continue
 		}
@@ -423,11 +576,39 @@ func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 		if preview.Mutates {
 			marker = "mutates"
 		}
-		lines = append(lines, "", fmt.Sprintf("%s (%s)", compat.SanitizeMetadata(preview.Title), marker))
+		if preview.Dangerous {
+			marker += ", dangerous"
+		}
+		lines = append(lines, "", selector+fmt.Sprintf("%s (%s)", compat.SanitizeMetadata(preview.Title), marker))
 		lines = append(lines, truncate(compat.SanitizeMetadata(preview.Command), width))
 		if preview.Description != "" {
 			lines = append(lines, wrap(compat.SanitizeMetadata(preview.Description), width))
 		}
+	}
+	return lines
+}
+
+func (m appModel) renderActionResult(width int) []string {
+	if m.actionResult == nil {
+		return nil
+	}
+	result := m.actionResult
+	status := "success"
+	if result.ExitCode != 0 || result.Err != "" {
+		status = "failed"
+	}
+	lines := []string{fmt.Sprintf("Result: %s (exit %d)", status, result.ExitCode)}
+	if result.Err != "" {
+		lines = append(lines, wrap(compat.SanitizeMetadata(result.Err), width))
+	}
+	if result.Stdout != "" {
+		lines = append(lines, "stdout:", fitLines(wrapText(result.Stdout, width), 8))
+	}
+	if result.Stderr != "" {
+		lines = append(lines, "stderr:", fitLines(wrapText(result.Stderr, width), 8))
+	}
+	if result.Truncated {
+		lines = append(lines, dimStyle.Render("output truncated"))
 	}
 	return lines
 }
@@ -437,9 +618,9 @@ func (m appModel) footer() string {
 	if m.searching {
 		mode = " search mode: type to filter, esc/enter to leave"
 	} else if m.commands {
-		mode = " command previews: c to hide"
+		mode = " actions: enter run, c hide"
 	}
-	return dimStyle.Render("LazySkills is read-only." + mode)
+	return dimStyle.Render("LazySkills actions are guarded." + mode)
 }
 
 func (m appModel) filteredSkills() []*model.Skill {

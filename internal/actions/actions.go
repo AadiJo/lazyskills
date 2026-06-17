@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -9,55 +10,99 @@ import (
 )
 
 type CommandPreview struct {
-	Title       string
-	Program     string
-	Args        []string
-	Command     string
-	Description string
-	Mutates     bool
-	Available   bool
-	Reason      string
+	ID              string
+	Title           string
+	Program         string
+	Args            []string
+	Exec            ExecSpec
+	Command         string
+	Description     string
+	Mutates         bool
+	RequiresConfirm bool
+	Dangerous       bool
+	ConfirmValue    string
+	Available       bool
+	Reason          string
 }
 
+type ExecSpec struct {
+	Program     string
+	Args        []string
+	Cwd         string
+	Interactive bool
+	Internal    string
+}
+
+type SkillsResolver func() (program string, baseArgs []string)
+
 func ForSkill(sk *model.Skill) []CommandPreview {
+	return ForSkillWithResolver(sk, ResolveSkillsCommand)
+}
+
+func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPreview {
 	if sk == nil {
 		return nil
 	}
+	if resolve == nil {
+		resolve = ResolveSkillsCommand
+	}
 	previews := []CommandPreview{
-		newPreview("Refresh LazySkills", "lazyskills", nil, "Refresh is handled inside the TUI with r; this command reopens the dashboard.", false),
+		newInternalPreview("refresh", "Refresh LazySkills", "refresh", "Rescan skills without leaving LazySkills.", false),
 	}
 
 	if addSource, skillFilter, ok, reason := addIdentity(sk); ok {
-		args := []string{"skills", "add", addSource, "--skill", skillFilter}
+		program, baseArgs := resolve()
+		args := append([]string{}, baseArgs...)
+		args = append(args, "add", addSource, "--skill", skillFilter, "--yes")
 		if sk.Scope == model.ScopeGlobal {
 			args = append(args, "-g")
 		}
-		preview := newPreview("Reinstall/update selected skill", "npx", args, "Mutating preview only. Reinstall/update this skill via the official skills CLI.", true)
+		preview := newPreview("reinstall_update", "Reinstall/update selected skill", program, args, "Reinstall/update this skill via the official skills CLI after confirmation.", true, true, false, "yes")
 		previews = append(previews, preview)
 	} else {
 		previews = append(previews, unavailablePreview("Reinstall/update selected skill", reason))
 	}
 
 	if target, ok, reason := removeIdentity(sk); ok {
-		args := []string{"skills", "remove", target}
+		program, baseArgs := resolve()
+		args := append([]string{}, baseArgs...)
+		args = append(args, "remove", target, "--yes")
 		if sk.Scope == model.ScopeGlobal {
 			args = append(args, "-g")
 		}
-		previews = append(previews, newPreview("Remove selected skill", "npx", args, "Mutating preview only. Remove this installed skill via the official skills CLI after confirmation outside LazySkills.", true))
+		previews = append(previews, newPreview("remove", "Remove selected skill", program, args, "Remove this installed skill via the official skills CLI after typing the exact target.", true, true, true, target))
 	} else {
 		previews = append(previews, unavailablePreview("Remove selected skill", reason))
 	}
 	return previews
 }
 
-func newPreview(title, program string, args []string, description string, mutates bool) CommandPreview {
-	program = safeToken(program)
-	safeArgs := make([]string, 0, len(args))
-	for _, arg := range args {
-		safeArgs = append(safeArgs, compat.SanitizeMetadata(arg))
+func ResolveSkillsCommand() (string, []string) {
+	if _, err := exec.LookPath("skills"); err == nil {
+		return "skills", nil
 	}
-	preview := CommandPreview{Title: title, Program: program, Args: safeArgs, Description: description, Mutates: mutates, Available: true}
-	preview.Command = renderCommand(program, safeArgs)
+	return "npx", []string{"--yes", "skills"}
+}
+
+func newInternalPreview(id, title, internal, description string, mutates bool) CommandPreview {
+	preview := CommandPreview{ID: id, Title: title, Description: description, Mutates: mutates, Available: true, Exec: ExecSpec{Internal: internal}}
+	preview.Command = title
+	return preview
+}
+
+func newPreview(id, title, program string, args []string, description string, mutates, confirm, dangerous bool, confirmValue string) CommandPreview {
+	if !safeExecValue(program) {
+		return unavailablePreview(title, "program is empty or unsafe")
+	}
+	execArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		if !safeExecValue(arg) {
+			return unavailablePreview(title, "command argument is empty, option-like, or contains control characters")
+		}
+		execArgs = append(execArgs, arg)
+	}
+	preview := CommandPreview{ID: id, Title: title, Program: program, Args: execArgs, Exec: ExecSpec{Program: program, Args: execArgs}, Description: description, Mutates: mutates, RequiresConfirm: confirm, Dangerous: dangerous, ConfirmValue: confirmValue, Available: true}
+	preview.Command = renderCommand(program, execArgs)
 	return preview
 }
 
@@ -68,11 +113,11 @@ func unavailablePreview(title, reason string) CommandPreview {
 func addIdentity(sk *model.Skill) (source string, skillFilter string, ok bool, reason string) {
 	source, ref, skillPath := sourceRefPath(sk)
 	source = buildInstallSource(source, ref, skillPath)
-	if !safeCLIValue(source) {
+	if !safeExecValue(source) || strings.HasPrefix(source, "-") {
 		return "", "", false, "source is empty or option-like"
 	}
-	filter := compat.SanitizeMetadata(sk.Name)
-	if !safeCLIValue(filter) {
+	filter := sk.Name
+	if !safeExecValue(filter) || strings.HasPrefix(filter, "-") {
 		return "", "", false, "skill name is empty or option-like"
 	}
 	return source, filter, true, ""
@@ -80,14 +125,10 @@ func addIdentity(sk *model.Skill) (source string, skillFilter string, ok bool, r
 
 func removeIdentity(sk *model.Skill) (target string, ok bool, reason string) {
 	for _, path := range candidateInstallPaths(sk) {
-		base := compat.SanitizeName(filepath.Base(path))
-		if safeCLIValue(base) {
+		base := filepath.Base(path)
+		if safeExecValue(base) && !strings.HasPrefix(base, "-") {
 			return base, true, ""
 		}
-	}
-	fallback := compat.SanitizeName(sk.Name)
-	if safeCLIValue(sk.Name) && safeCLIValue(fallback) {
-		return fallback, true, ""
 	}
 	return "", false, "installed directory identity is empty or option-like"
 }
@@ -110,16 +151,22 @@ func sourceRefPath(sk *model.Skill) (source, ref, skillPath string) {
 
 func globalUpdateSource(entry model.GlobalLockEntry) string {
 	if entry.SkillPath == "" {
-		return firstNonEmpty(entry.SourceURL, entry.Source)
+		return firstRawNonEmpty(entry.SourceURL, entry.Source)
 	}
-	return firstNonEmpty(entry.Source, entry.SourceURL)
+	return firstRawNonEmpty(entry.Source, entry.SourceURL)
 }
 
 func buildInstallSource(source, ref, skillPath string) string {
-	source = compat.SanitizeMetadata(source)
-	ref = compat.SanitizeMetadata(ref)
-	skillPath = compat.SanitizeMetadata(skillPath)
 	if source == "" {
+		return ""
+	}
+	if !safeExecValue(source) || strings.HasPrefix(source, "-") {
+		return ""
+	}
+	if ref != "" && (!safeExecValue(ref) || strings.HasPrefix(ref, "-")) {
+		return ""
+	}
+	if skillPath != "" && (!safeExecValue(skillPath) || strings.HasPrefix(skillPath, "-")) {
 		return ""
 	}
 	if skillPath != "" && supportsAppendedSubpath(source) {
@@ -172,6 +219,13 @@ func safeCLIValue(value string) bool {
 	return value != "" && !strings.HasPrefix(value, "-")
 }
 
+func safeExecValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	return compat.SanitizeMetadata(value) == value && !strings.ContainsAny(value, "\x00\x1b\r\n")
+}
+
 func safeToken(value string) string {
 	value = compat.SanitizeMetadata(value)
 	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, " \t\n'\"$`\\!*?[]{}()&;<>|") {
@@ -203,6 +257,15 @@ func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
 			return compat.SanitizeMetadata(value)
+		}
+	}
+	return ""
+}
+
+func firstRawNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
 	return ""
