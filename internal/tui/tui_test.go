@@ -63,19 +63,19 @@ func TestAgentFilterLimitsVisibleSkills(t *testing.T) {
 
 func TestListTitleReflectsAgentFilter(t *testing.T) {
 	m := appModel{width: 100, height: 20, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
-	if title := m.listTitle(); !strings.Contains(title, "1 Skills") {
+	if title := m.listTitle(); !strings.Contains(title, "1 Inventory") {
 		t.Fatalf("expected all-skills title, got %q", title)
 	}
 	out := m.View()
-	if !strings.Contains(out, "1 Skills") {
+	if !strings.Contains(out, "1 Inventory") {
 		t.Fatalf("expected view to contain all-skills title in border, got %q", out)
 	}
 	m.agent = "opencode"
-	if title := m.listTitle(); !strings.Contains(title, "1 Skills (OpenCode)") {
+	if title := m.listTitle(); !strings.Contains(title, "1 Inventory (OpenCode)") {
 		t.Fatalf("expected agent-specific title, got %q", title)
 	}
 	out = m.View()
-	if !strings.Contains(out, "1 Skills (OpenCode)") {
+	if !strings.Contains(out, "1 Inventory (OpenCode)") {
 		t.Fatalf("expected view to contain agent-specific title in border, got %q", out)
 	}
 }
@@ -1087,7 +1087,7 @@ func TestThreePaneLayoutFocusAndScroll(t *testing.T) {
 
 	// Check View output has border titles
 	out := m.View()
-	if !strings.Contains(out, "1 Skills") || !strings.Contains(out, "2 Metadata") || !strings.Contains(out, "3 Preview") {
+	if !strings.Contains(out, "1 Inventory") || !strings.Contains(out, "2 Metadata") || !strings.Contains(out, "3 Preview") {
 		t.Fatalf("expected border titles in View, got:\n%s", out)
 	}
 
@@ -1280,8 +1280,9 @@ func TestSkillsFindTriggersRescan(t *testing.T) {
 
 func TestContextualFooterAndHelpModal(t *testing.T) {
 	m := appModel{
-		width:  100,
-		height: 30,
+		width:    100,
+		height:   30,
+		selected: 1,
 		result: model.ScanResult{
 			Skills: []*model.Skill{
 				{Name: "Build", Scope: model.ScopeProject},
@@ -1292,9 +1293,17 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 
 	// 1. Default footer (Skills focused)
 	outDefault := m.View()
-	if !strings.Contains(outDefault, "enter open · c commands") {
+	if !strings.Contains(outDefault, "enter open · c skill actions") {
 		t.Fatalf("expected default footer in View, got:\n%s", outDefault)
 	}
+
+	// 1b. Source row selected footer
+	m.selected = 0
+	outHeaderFooter := m.View()
+	if !strings.Contains(outHeaderFooter, "enter toggle · c source actions") {
+		t.Fatalf("expected source group footer in View, got:\n%s", outHeaderFooter)
+	}
+	m.selected = 1
 
 	// 2. Metadata focus footer
 	m.focus = focusMetadata
@@ -1440,8 +1449,8 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 	m.selected = 0 // select header row owner/one
 	m.collapsedGroups["owner/one"] = true
 	outHeader := m.View()
-	if !strings.Contains(outHeader, "State:       collapsed") || !strings.Contains(outHeader, "Source-level actions coming later.") {
-		t.Fatalf("expected header placeholder in Metadata pane, got:\n%s", outHeader)
+	if !strings.Contains(outHeader, "State:       collapsed") || !strings.Contains(outHeader, "Note: Only installed skills are known locally.") {
+		t.Fatalf("expected header placeholder/metadata in Metadata pane, got:\n%s", outHeader)
 	}
 
 	// Verify that header row selection has no skill-scoped actions
@@ -1462,5 +1471,86 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 	m = updated.(appModel)
 	if !m.isCollapsed("owner/one") {
 		t.Fatal("expected enter on expanded header to collapse it")
+	}
+}
+
+func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
+	m := appModel{
+		width:           120,
+		height:          32,
+		focus:           focusSkills,
+		collapsedGroups: make(map[string]bool),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{Name: "One", Scope: model.ScopeProject, CanonicalPath: "/tmp/one", LocalLock: &model.LocalLockEntry{Source: "owner/one", ComputedHash: "hash1"}},
+				{Name: "Two", Scope: model.ScopeGlobal, CanonicalPath: "/tmp/two", LocalLock: &model.LocalLockEntry{Source: "owner/one"}},
+			},
+		},
+	}
+	m.syncViewport()
+
+	// Select the header row owner/one (index 0)
+	m.selected = 0
+
+	// 1. Assert structured metadata info
+	metaLines := m.metadataLines(80)
+	metaJoined := strings.Join(metaLines, "\n")
+	if !strings.Contains(metaJoined, "Source:      owner/one") {
+		t.Errorf("expected source name in metadata, got %q", metaJoined)
+	}
+	if !strings.Contains(metaJoined, "State:       expanded") {
+		t.Errorf("expected state in metadata, got %q", metaJoined)
+	}
+	if !strings.Contains(metaJoined, "Skills:      2 visible / 2 total") {
+		t.Errorf("expected skills count in metadata, got %q", metaJoined)
+	}
+	if !strings.Contains(metaJoined, "Scope:       mixed") {
+		t.Errorf("expected scope mixed in metadata, got %q", metaJoined)
+	}
+	if !strings.Contains(metaJoined, "Hash:        hash1") {
+		t.Errorf("expected lock hash in metadata, got %q", metaJoined)
+	}
+	if !strings.Contains(metaJoined, "Note: Only installed skills are known locally.") {
+		t.Errorf("expected local knowledge disclaimer in metadata, got %q", metaJoined)
+	}
+
+	// 2. Assert source preview listing installed skills
+	prevLines := m.previewLines(80)
+	prevJoined := strings.Join(prevLines, "\n")
+	if !strings.Contains(prevJoined, "Installed Skills:") {
+		t.Errorf("expected Installed Skills header in preview, got %q", prevJoined)
+	}
+	if !strings.Contains(prevJoined, "• One [P]") || !strings.Contains(prevJoined, "• Two [G]") {
+		t.Errorf("expected skills listed with scope badges in preview, got %q", prevJoined)
+	}
+	if !strings.Contains(prevJoined, "Only installed skills are shown.") || !strings.Contains(prevJoined, "Source discovery can be added later.") {
+		t.Errorf("expected preview footnotes in preview, got %q", prevJoined)
+	}
+
+	// 3. Assert currentActions for source row
+	acts := m.currentActions()
+	var hasUpdate, hasRemove, hasAppLevel, hasSkillLevel bool
+	for _, act := range acts {
+		if act.ID == "bulk_reinstall_update" && act.Title == "Update installed skills from source" {
+			hasUpdate = true
+		}
+		if act.ID == "bulk_remove" && act.Title == "Remove installed skills from source" {
+			hasRemove = true
+		}
+		if act.ID == "skills_init" || act.ID == "skills_find" || act.ID == "skills_update" {
+			hasAppLevel = true
+		}
+		if act.ID == "reinstall_update" || act.ID == "remove" || act.ID == "open_skill" {
+			hasSkillLevel = true
+		}
+	}
+	if !hasUpdate || !hasRemove {
+		t.Errorf("expected source update/remove actions to be present, got %+v", acts)
+	}
+	if hasAppLevel {
+		t.Errorf("did not expect app-level actions for source row, got %+v", acts)
+	}
+	if hasSkillLevel {
+		t.Errorf("did not expect skill-scoped actions for source row, got %+v", acts)
 	}
 }

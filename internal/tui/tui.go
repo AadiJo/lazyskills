@@ -582,7 +582,7 @@ func (m appModel) currentActions() []actions.CommandPreview {
 	}
 	row := rows[m.selected]
 	if row.isHeader {
-		return actions.AppLevelActions()
+		return m.sourceActions(row.groupName)
 	}
 	return actions.ForSkill(row.skill)
 }
@@ -906,7 +906,7 @@ func (m *appModel) toggleSelectedSkill() {
 		return
 	}
 	row := rows[m.selected]
-	if row.isHeader {
+	if row.isHeader || row.skill == nil {
 		return
 	}
 	if m.selectedKeys == nil {
@@ -1006,6 +1006,33 @@ func (m appModel) selectedSkills() []*model.Skill {
 		}
 	}
 	return selected
+}
+
+func (m appModel) sourceGroupSkills(group string) []*model.Skill {
+	var out []*model.Skill
+	for _, skill := range m.filteredSkills() {
+		if listGroupLabel(skill) == group {
+			out = append(out, skill)
+		}
+	}
+	return out
+}
+
+func (m appModel) sourceActions(group string) []actions.CommandPreview {
+	skills := m.sourceGroupSkills(group)
+	previews := actions.ForSkills(skills)
+	for i := range previews {
+		switch previews[i].ID {
+		case "bulk_reinstall_update":
+			previews[i].Title = "Update installed skills from source"
+			previews[i].Description = "Refresh installed skills from this source."
+		case "bulk_remove":
+			previews[i].Title = "Remove installed skills from source"
+			previews[i].Description = "Remove installed skills from this source."
+			previews[i].ConfirmValue = group
+		}
+	}
+	return previews
 }
 
 func skillKey(skill *model.Skill) string {
@@ -1243,93 +1270,6 @@ func (m appModel) View() string {
 	return view + "\n" + footer
 }
 
-func (m appModel) filterPane(width int) string {
-	counts := map[model.Scope]int{}
-	issues := 0
-	for _, sk := range m.result.Skills {
-		counts[sk.Scope]++
-		issues += len(sk.HealthIssues)
-	}
-	issues += len(m.result.HealthIssues)
-	lines := []string{
-		titleStyle.Render("LazySkills"),
-		dimStyle.Render(compat.SanitizeMetadata(m.result.Cwd)),
-		"",
-		filterLine("All", m.filter == scopeAll),
-		filterLine(fmt.Sprintf("[P]roject (%d)", counts[model.ScopeProject]), m.filter == scopeProject),
-		filterLine(fmt.Sprintf("[G]lobal (%d)", counts[model.ScopeGlobal]), m.filter == scopeGlobal),
-		"",
-		fmt.Sprintf("Skills: %d", len(m.result.Skills)),
-		fmt.Sprintf("Issues: %d", issues),
-		fmt.Sprintf("Agent: %s", m.agentLabel()),
-	}
-	if m.result.Preflight != nil {
-		lines = append(lines, "", titleStyle.Render("Dependencies"))
-		if m.result.Preflight.CanRunSkills {
-			lines = append(lines, successStyle.Render("  ✓ Ready"))
-		} else {
-			lines = append(lines, errorStyle.Render("  ✗ Missing"))
-			for _, tool := range []string{"skills", "npx", "node", "npm"} {
-				status := "✓"
-				style := successStyle
-				if !m.result.Preflight.Tools[tool].Exists {
-					status = "✗"
-					style = errorStyle
-				}
-				lines = append(lines, style.Render(fmt.Sprintf("    %s %s", status, tool)))
-			}
-		}
-	}
-	if len(m.result.HealthIssues) > 0 {
-		lines = append(lines, "", errorStyle.Render("Scan health"))
-		for _, issue := range m.result.HealthIssues {
-			lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
-		}
-	}
-	if m.search != "" || m.searching {
-		prompt := "/" + compat.SanitizeMetadata(m.search)
-		if m.searching {
-			prompt += "_"
-		}
-		lines = append(lines, "", "Search", prompt)
-	}
-	if m.help {
-		lines = append(lines, "", "Keys",
-			"↑/↓ j/k select/scroll",
-			"1 / 2 focus pane",
-			"tab cycle focus",
-			"→/l focus det",
-			"←/h focus list",
-			"enter details modal",
-			"P project scope",
-			"G global scope",
-			"f cycle scope",
-			"F clear scope",
-			"[ / ] grp jump",
-			"space mark",
-			"s source mark",
-			"o open",
-			"u update",
-			"x remove",
-			"a agent",
-			"A all agents",
-			"c actions",
-			"/ search",
-			"r refresh",
-			"? help",
-			"q quit",
-		)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func filterLine(label string, active bool) string {
-	if active {
-		return selectedStyle.Render("› " + label)
-	}
-	return "  " + label
-}
-
 func scopeBadge(scope string) string {
 	switch scope {
 	case string(model.ScopeProject):
@@ -1342,9 +1282,9 @@ func scopeBadge(scope string) string {
 }
 
 func (m appModel) listTitle() string {
-	title := "1 Skills"
+	title := "1 Inventory"
 	if m.agent != "" {
-		title = "1 Skills (" + m.agentLabel() + ")"
+		title = "1 Inventory (" + m.agentLabel() + ")"
 	}
 	return title
 }
@@ -1481,11 +1421,6 @@ func (m appModel) listPane(height, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-type listRow struct {
-	line       string
-	skillIndex int
-}
-
 func healthIssueCounts(issues []display.HealthIssueView) (errors int, warnings int) {
 	for _, issue := range issues {
 		if issue.Severity == "error" {
@@ -1541,19 +1476,6 @@ func (m appModel) detailPane() string {
 
 func (m appModel) detailText(width int) string {
 	return strings.Join(m.detailLines(width), "\n")
-}
-
-func (m appModel) detailTitle() string {
-	rows := m.visibleRows()
-	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
-		return "2 Details"
-	}
-	row := rows[m.selected]
-	if row.isHeader {
-		return "2 Details: " + row.groupName
-	}
-	view := display.Skill(row.skill)
-	return "2 Details: " + view.Name
 }
 
 func (m appModel) metadataLines(width int) []string {
@@ -1622,17 +1544,89 @@ func (m appModel) metadataLines(width int) []string {
 		if m.isCollapsed(row.groupName) {
 			stateStr = "collapsed"
 		}
+
+		skills := m.sourceGroupSkills(row.groupName)
+		var folders, refs, hashes []string
+		var projectCount, globalCount int
+		var skillIssues []display.HealthIssueView
+
+		for _, sk := range skills {
+			info := sourceInfo(sk)
+			if info.Folder != "" {
+				folders = append(folders, info.Folder)
+			}
+			if info.Ref != "" {
+				refs = append(refs, info.Ref)
+			}
+			var h string
+			if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
+				h = sk.LocalLock.ComputedHash
+			} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
+				h = sk.GlobalLock.SkillFolderHash
+			}
+			if h != "" {
+				hashes = append(hashes, h)
+			}
+			if sk.Scope == model.ScopeProject {
+				projectCount++
+			} else if sk.Scope == model.ScopeGlobal {
+				globalCount++
+			}
+
+			// Parse health issues
+			view := display.Skill(sk)
+			skillIssues = append(skillIssues, view.HealthIssues...)
+		}
+
+		scopeStr := "mixed"
+		if projectCount > 0 && globalCount == 0 {
+			scopeStr = "project"
+		} else if globalCount > 0 && projectCount == 0 {
+			scopeStr = "global"
+		} else if projectCount == 0 && globalCount == 0 {
+			scopeStr = "unknown"
+		}
+
 		lines := []string{
 			formatMetaLine("Source:", row.groupName, width),
 			formatMetaLine("State:", stateStr, width),
 			formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
-			"",
-			dimStyle.Render("Source-level actions coming later."),
+			formatMetaLine("Scope:", scopeStr, width),
 		}
-		if len(m.result.HealthIssues) > 0 {
-			lines = append(lines, "", errorStyle.Render("Scan health"))
-			for _, issue := range m.result.HealthIssues {
-				lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
+
+		if len(folders) > 0 {
+			lines = append(lines, formatMetaLine("Folder:", folders[0], width))
+		}
+		if len(refs) > 0 {
+			lines = append(lines, formatMetaLine("Ref:", refs[0], width))
+		}
+		if len(hashes) > 0 {
+			lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
+		}
+
+		healthStr := "healthy"
+		if len(skillIssues) > 0 {
+			healthStr = "issues detected"
+		}
+		lines = append(lines, formatMetaLine("Health:", healthStr, width))
+
+		lines = append(lines,
+			"",
+			dimStyle.Render("Note: Only installed skills are known locally."),
+		)
+
+		if len(skillIssues) > 0 {
+			lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+			for _, issue := range skillIssues {
+				line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+				if issue.Path != "" {
+					line += " (" + issue.Path + ")"
+				}
+				style := warningStyle
+				if issue.Severity == "error" {
+					style = errorStyle
+				}
+				lines = append(lines, style.Render(wrapText(line, width)))
 			}
 		}
 		return lines
@@ -1736,9 +1730,21 @@ func (m appModel) previewLines(width int) []string {
 
 	row := rows[m.selected]
 	if row.isHeader {
-		return []string{
-			dimStyle.Render("Preview not applicable for source groups."),
+		skills := m.sourceGroupSkills(row.groupName)
+		lines := []string{"Installed Skills:"}
+		for _, sk := range skills {
+			lines = append(lines, fmt.Sprintf("• %s [%s]", sk.Name, scopeBadge(string(sk.Scope))))
 		}
+		lines = append(lines,
+			"",
+			"Only installed skills are shown.",
+			"Source discovery can be added later.",
+		)
+		var wrapped []string
+		for _, line := range lines {
+			wrapped = append(wrapped, wrapText(line, width))
+		}
+		return wrapped
 	}
 
 	view := display.Skill(row.skill)
@@ -2023,7 +2029,16 @@ func (m appModel) footerText(width int) string {
 		text = "↑/↓ scroll preview · enter open · c commands · o edit · ? help"
 	} else {
 		// focusSkills
-		text = "enter open · c commands · / search · f scope · a agent · r reload · ? help"
+		rows := m.visibleRows()
+		var selectedIsHeader bool
+		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
+			selectedIsHeader = rows[m.selected].isHeader
+		}
+		if selectedIsHeader {
+			text = "enter toggle · c source actions · / search · f scope · a agent · r reload · ? help"
+		} else {
+			text = "enter open · c skill actions · / search · f scope · a agent · r reload · ? help"
+		}
 	}
 	return dimStyle.Render(truncate(text, width))
 }
