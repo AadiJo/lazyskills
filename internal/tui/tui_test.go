@@ -58,18 +58,19 @@ func TestAgentFilterLimitsVisibleSkills(t *testing.T) {
 	}
 }
 
-func TestNextAgentFilterCyclesThroughObservedAgents(t *testing.T) {
-	m := appModel{result: model.ScanResult{Skills: []*model.Skill{
-		{Name: "A", ObservedPaths: []model.ObservedPath{{Agent: "opencode"}, {Agent: "cursor"}}},
+func TestNextAgentFilterCyclesThroughDetectedAgents(t *testing.T) {
+	m := appModel{result: model.ScanResult{Agents: []model.AgentState{
+		{Name: "opencode", Detected: true},
+		{Name: "cursor", Detected: true},
 	}}}
 	first := m.nextAgentFilter()
 	if first != "cursor" {
-		t.Fatalf("expected first observed agent cursor, got %q", first)
+		t.Fatalf("expected first detected agent cursor, got %q", first)
 	}
 	m.agent = first
 	second := m.nextAgentFilter()
 	if second != "opencode" {
-		t.Fatalf("expected second observed agent opencode, got %q", second)
+		t.Fatalf("expected second detected agent opencode, got %q", second)
 	}
 	m.agent = second
 	if got := m.nextAgentFilter(); got != "" {
@@ -77,7 +78,7 @@ func TestNextAgentFilterCyclesThroughObservedAgents(t *testing.T) {
 	}
 }
 
-func TestAgentFilterCyclesDetectedAgentsBeforeSupportedFallback(t *testing.T) {
+func TestAgentFilterCyclesDetectedAgentsNoSupportedFallback(t *testing.T) {
 	m := appModel{result: model.ScanResult{Agents: []model.AgentState{
 		{Name: "opencode", Display: "OpenCode", Detected: true},
 		{Name: "cursor", Display: "Cursor"},
@@ -87,8 +88,31 @@ func TestAgentFilterCyclesDetectedAgentsBeforeSupportedFallback(t *testing.T) {
 		t.Fatalf("expected only detected agents in rotation, got %#v", got)
 	}
 	m = appModel{result: model.ScanResult{Agents: []model.AgentState{{Name: "opencode", Display: "OpenCode"}}}}
-	if got := m.agentFilters(); len(got) != 1 || got[0] != "opencode" {
-		t.Fatalf("expected fallback to supported agents when none detected, got %#v", got)
+	if got := m.agentFilters(); len(got) != 0 {
+		t.Fatalf("expected no fallback to supported agents when none detected, got %#v", got)
+	}
+}
+
+func TestAgentClearedOnRefreshIfNoLongerDetected(t *testing.T) {
+	m := appModel{
+		agent: "opencode",
+		result: model.ScanResult{
+			Agents: []model.AgentState{
+				{Name: "opencode", Detected: true},
+			},
+		},
+	}
+	// Simulate a snapshotMsg where opencode is no longer detected (or not present in Agents)
+	updated, _ := m.Update(snapshotMsg{
+		result: model.ScanResult{
+			Agents: []model.AgentState{
+				{Name: "opencode", Detected: false},
+			},
+		},
+	})
+	next := updated.(appModel)
+	if next.agent != "" {
+		t.Fatalf("expected agent to be cleared when no longer detected after refresh, got %q", next.agent)
 	}
 }
 
@@ -335,15 +359,21 @@ func TestSpaceMarksSkillsAndEscClearsSelection(t *testing.T) {
 	}
 }
 
-func TestEscClearsSelectionBeforeLeavingActionModeOrAgentFilter(t *testing.T) {
+func TestEscClosesActionPickerOverlay(t *testing.T) {
 	m := bulkActionTestModel(t.TempDir())
 	m.commands = true
 	m.agent = "opencode"
 	m.selectedKeys = map[string]bool{skillKey(m.result.Skills[0]): true}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	next := updated.(appModel)
-	if next.selectedCount() != 0 || !next.commands || next.agent != "opencode" {
-		t.Fatalf("expected esc to clear selection first, selected=%d commands=%v agent=%q", next.selectedCount(), next.commands, next.agent)
+	if next.commands {
+		t.Fatalf("expected esc to close action mode overlay, commands is still true")
+	}
+	if next.selectedCount() != 1 {
+		t.Fatalf("expected selection to be preserved when action mode is closed, got %d", next.selectedCount())
+	}
+	if next.agent != "opencode" {
+		t.Fatalf("expected agent to be preserved when action mode is closed, got %q", next.agent)
 	}
 }
 

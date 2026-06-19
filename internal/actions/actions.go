@@ -58,12 +58,12 @@ func ForSkillsWithResolver(skills []*model.Skill, resolve SkillsResolver) []Comm
 	removeBatch, removeOK, removeReason := bulkBatch(skills, resolve, "remove")
 	previews := []CommandPreview{}
 	if updateOK {
-		previews = append(previews, newBatchPreview("bulk_reinstall_update", fmt.Sprintf("Reinstall/update %d selected skills", count), updateBatch, fmt.Sprintf("Run the official skills CLI update flow for %d selected skills.", count), fmt.Sprintf("update %d skills", count), false))
+		previews = append(previews, newBatchPreview("bulk_reinstall_update", fmt.Sprintf("Reinstall/update %d selected skills", count), updateBatch, "Refresh the selected skills.", fmt.Sprintf("update %d skills", count), false))
 	} else {
 		previews = append(previews, unavailablePreview(fmt.Sprintf("Reinstall/update %d selected skills", count), updateReason))
 	}
 	if removeOK {
-		previews = append(previews, newBatchPreview("bulk_remove", fmt.Sprintf("Remove %d selected skills", count), removeBatch, fmt.Sprintf("Remove %d selected installed skills via the official skills CLI.", count), fmt.Sprintf("remove %d skills", count), true))
+		previews = append(previews, newBatchPreview("bulk_remove", fmt.Sprintf("Remove %d selected skills", count), removeBatch, "Delete the selected installed skills.", fmt.Sprintf("remove %d skills", count), true))
 	} else {
 		previews = append(previews, unavailablePreview(fmt.Sprintf("Remove %d selected skills", count), removeReason))
 	}
@@ -113,7 +113,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 		if sk.Scope == model.ScopeGlobal {
 			args = append(args, "-g")
 		}
-		preview := newPreview("reinstall_update", "Reinstall/update selected skill", program, args, "Reinstall/update this skill via the official skills CLI after confirmation.", true, true, false, "yes")
+		preview := newPreview("reinstall_update", "Reinstall/update selected skill", program, args, "Refresh this skill from its source.", true, true, false, "yes")
 		previews = append(previews, preview)
 	} else {
 		previews = append(previews, unavailablePreview("Reinstall/update selected skill", reason))
@@ -126,7 +126,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 		if sk.Scope == model.ScopeGlobal {
 			args = append(args, "-g")
 		}
-		previews = append(previews, newPreview("remove", "Remove selected skill", program, args, "Remove this installed skill via the official skills CLI after typing the exact target.", true, true, true, target))
+		previews = append(previews, newPreview("remove", "Remove selected skill", program, args, "Delete this installed skill.", true, true, true, target))
 	} else {
 		previews = append(previews, unavailablePreview("Remove selected skill", reason))
 	}
@@ -156,7 +156,7 @@ func openEditorAction(sk *model.Skill) (CommandPreview, bool, string) {
 	}
 	args := append([]string{}, parts[1:]...)
 	args = append(args, target)
-	preview := newPreview("open_skill", "Open selected skill", parts[0], args, "Open this skill in $EDITOR. LazySkills releases the terminal while the editor runs.", false, false, false, "")
+	preview := newPreview("open_skill", "Open selected skill", parts[0], args, "Open in $EDITOR.", false, false, false, "")
 	if !preview.Available {
 		return CommandPreview{}, false, preview.Reason
 	}

@@ -85,10 +85,14 @@ var (
 	runExec       = runner.OSRunner{}.Run
 
 	// Action Mode UI Polish Styles
-	actionTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
-	activeActionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	actionNormalStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
-	actionBorderColor = lipgloss.Color("62")
+	actionTitleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
+	activeActionStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	activeActionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	activeActionSubStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("62"))
+	normalActionTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	normalActionSubStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	actionNormalStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	actionBorderColor      = lipgloss.Color("62")
 	runningStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 	successStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
 
@@ -140,6 +144,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result = msg.result
 		sortSkills(m.result.Skills)
 		m.err = msg.err
+		if m.agent != "" {
+			detected := false
+			for _, filter := range m.agentFilters() {
+				if filter == m.agent {
+					detected = true
+					break
+				}
+			}
+			if !detected {
+				m.agent = ""
+			}
+		}
 		m.clampSelection()
 		m.pruneSelected()
 		m.actionResult = nil
@@ -230,14 +246,37 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.commands {
+			switch key {
+			case "esc", "c":
+				m.commands = false
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "up", "k":
+				m.action--
+				m.clampAction()
+			case "down", "j":
+				m.action++
+				m.clampAction()
+			case "enter":
+				return m.startAction()
+			case "o":
+				return m.startCurrentSkillActionByID("open_skill")
+			case "u":
+				return m.startActionByID(preferredUpdateActionID(m.selectedCount()))
+			case "x":
+				return m.startActionByID(preferredRemoveActionID(m.selectedCount()))
+			}
+			m.syncViewport()
+			return m, nil
+		}
+
 		switch key {
 		case "esc":
 			if m.selectedCount() > 0 {
 				m.selectedKeys = nil
 				m.action = 0
 				m.actionResult = nil
-			} else if m.commands {
-				m.commands = false
 			} else if m.agent != "" {
 				m.agent = ""
 				m.selected = 0
@@ -268,10 +307,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.startActionByID(preferredRemoveActionID(m.selectedCount()))
 		case "/":
 			m.searching = true
-		case "enter":
-			if m.commands {
-				return m.startAction()
-			}
 		case "r":
 			m.viewport.GotoTop()
 			return m, loadSnapshot(m.cwd)
@@ -302,21 +337,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "left", "h":
 			m.jumpSourceGroup(-1)
 		case "down", "j":
-			if m.commands {
-				m.action++
-			} else {
-				m.selected++
-				m.actionResult = nil
-				m.viewport.GotoTop()
-			}
+			m.selected++
+			m.actionResult = nil
+			m.viewport.GotoTop()
 		case "up", "k":
-			if m.commands {
-				m.action--
-			} else {
-				m.selected--
-				m.actionResult = nil
-				m.viewport.GotoTop()
-			}
+			m.selected--
+			m.actionResult = nil
+			m.viewport.GotoTop()
 		case "pgdown", "ctrl+d":
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -778,9 +805,6 @@ func (m appModel) View() string {
 	leftStyle := paneStyle(layout.Left)
 	listStyle := paneStyle(layout.List)
 	detailStyle := paneStyle(layout.Detail)
-	if viewModel.commands {
-		detailStyle = detailStyle.BorderForeground(actionBorderColor)
-	}
 	left := leftStyle.Render(fitLines(viewModel.filterPane(layout.Left.ContentWidth), layout.Left.ContentHeight))
 	list := listStyle.Render(fitLines(viewModel.listPane(layout.List.ContentHeight, layout.List.ContentWidth), layout.List.ContentHeight))
 	detail := detailStyle.Render(viewModel.detailPane())
@@ -791,6 +815,9 @@ func (m appModel) View() string {
 	}
 	if viewModel.confirming {
 		return viewModel.confirmationOverlay(layout)
+	}
+	if viewModel.commands {
+		return viewModel.commandsOverlay(layout)
 	}
 	return view
 }
@@ -916,14 +943,7 @@ func (m appModel) detailText(width int) string {
 func (m appModel) detailLines(width int) []string {
 	items := m.filteredSkills()
 	if len(items) == 0 {
-		lines := []string{titleStyle.Render("Details"), "", dimStyle.Render("Select a skill to inspect it.")}
-		if m.commands && m.selectedCount() > 0 {
-			lines = append(lines, "")
-			divider := lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Render(strings.Repeat("─", max(1, width)))
-			lines = append(lines, divider)
-			lines = append(lines, m.commandPreview(nil, max(1, width-4))...)
-		}
-		return lines
+		return []string{titleStyle.Render("Details"), "", dimStyle.Render("Select a skill to inspect it.")}
 	}
 	view := display.Skill(items[m.selected])
 	lines := []string{
@@ -944,15 +964,34 @@ func (m appModel) detailLines(width int) []string {
 		lines = append(lines, formatMetaLine("Agent:", m.agentLabel(), width))
 	}
 	lines = append(lines, m.visibilitySummary(view, width)...)
-
-	if len(view.Observed) > 0 {
-		lines = append(lines, "", sectionHeaderStyle.Render("Observed Paths"))
+	if len(view.Observed) > 0 && m.agent == "" {
+		agentsSet := map[string]bool{}
+		observedAgents := []string{}
 		for _, p := range view.Observed {
-			line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
-			if p.TargetPath != "" {
-				line += " → " + p.TargetPath
+			if p.Agent != "" && !agentsSet[p.Agent] {
+				agentsSet[p.Agent] = true
+				observedAgents = append(observedAgents, p.Agent)
 			}
-			lines = append(lines, wrapText(line, width))
+		}
+		if len(observedAgents) > 0 {
+			lines = append(lines, formatMetaLine("Observed:", strings.Join(observedAgents, ", "), width))
+		}
+	}
+
+	if len(view.Observed) > 0 && m.agent != "" {
+		showObservedSection := false
+		for _, p := range view.Observed {
+			if p.Agent == m.agent {
+				if !showObservedSection {
+					lines = append(lines, "", sectionHeaderStyle.Render("Observed Paths"))
+					showObservedSection = true
+				}
+				line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
+				if p.TargetPath != "" {
+					line += " → " + p.TargetPath
+				}
+				lines = append(lines, wrapText(line, width))
+			}
 		}
 	}
 
@@ -967,13 +1006,6 @@ func (m appModel) detailLines(width int) []string {
 		}
 	}
 
-	if m.commands {
-		lines = append(lines, "")
-		divider := lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Render(strings.Repeat("─", max(1, width)))
-		lines = append(lines, divider)
-		lines = append(lines, m.commandPreview(items[m.selected], max(1, width-4))...)
-		return lines
-	}
 	if view.Preview != "" {
 		lines = append(lines, "")
 		previewDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Repeat("─", max(1, width)))
@@ -1018,13 +1050,34 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 	return []string{formatMetaLine("Visibility:", val, width)}
 }
 
+func (m appModel) commandsOverlay(layout appLayout) string {
+	modalWidth := 70
+	if layout.Width < modalWidth+4 {
+		modalWidth = layout.Width - 4
+	}
+	if modalWidth < 20 {
+		modalWidth = 20
+	}
+
+	lines := m.commandPreview(nil, modalWidth-4)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(actionBorderColor).
+		Padding(1, 2).
+		Width(modalWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
 func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 	title := " Actions "
 	if count := m.selectedCount(); count > 0 {
 		title = fmt.Sprintf(" Bulk actions · %d selected ", count)
 	}
 	lines := []string{actionTitleStyle.Render(title)}
-	lines = append(lines, dimStyle.Render("  j/k choose, enter run, o/u/x shortcuts, c hide"))
+	lines = append(lines, dimStyle.Render("  ↑/↓ choose · enter run · c/esc close"))
 	if m.running {
 		lines = append(lines, "", "  "+runningStyle.Render("Running action..."))
 	}
@@ -1043,39 +1096,60 @@ func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 		if !preview.Available {
 			titleText := fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title))
 			if i == m.action {
-				lines = append(lines, "", activeActionStyle.Render(selector+titleText))
+				titleLine := activeActionTitleStyle.Render(padRight(selector+titleText, width))
+				lines = append(lines, "", titleLine)
+				if preview.Reason != "" {
+					reasonText := wrap(compat.SanitizeMetadata(preview.Reason), width-4)
+					for _, reasonLine := range strings.Split(reasonText, "\n") {
+						lines = append(lines, activeActionSubStyle.Render(padRight("  "+reasonLine, width)))
+					}
+				}
 			} else {
-				lines = append(lines, "", dimStyle.Render(selector+titleText))
-			}
-			if preview.Reason != "" {
-				lines = append(lines, indent(wrap(compat.SanitizeMetadata(preview.Reason), width-2), "  "))
+				titleLine := normalActionSubStyle.Render(selector + titleText)
+				lines = append(lines, "", titleLine)
+				if preview.Reason != "" {
+					reasonText := wrap(compat.SanitizeMetadata(preview.Reason), width-4)
+					for _, reasonLine := range strings.Split(reasonText, "\n") {
+						lines = append(lines, normalActionSubStyle.Render("  "+reasonLine))
+					}
+				}
 			}
 			continue
 		}
-		marker := "read-only"
-		if preview.Mutates {
-			marker = "mutates"
-		}
+		titleText := compat.SanitizeMetadata(preview.Title)
 		if preview.Dangerous {
-			marker += ", dangerous"
+			titleText += " — removes skills"
+		} else if preview.Mutates {
+			titleText += " — changes skills"
 		}
-
-		titleText := fmt.Sprintf("%s (%s)", compat.SanitizeMetadata(preview.Title), marker)
 		if i == m.action {
-			lines = append(lines, "", activeActionStyle.Render(selector+titleText))
-			lines = append(lines, "  "+actionNormalStyle.Render(truncate(compat.SanitizeMetadata(preview.Command), width-2)))
-			if preview.Description != "" {
-				lines = append(lines, indent(wrap(compat.SanitizeMetadata(preview.Description), width-2), "  "))
-			}
+			// Selected Action Highlight Block (entire block has same purple background)
+			titleLine := activeActionTitleStyle.Render(padRight(selector+titleText, width))
+			lines = append(lines, "", titleLine)
+
+			cmdText := truncate(compat.SanitizeMetadata(preview.Command), width-4)
+			cmdLine := activeActionSubStyle.Render(padRight("  "+cmdText, width))
+			lines = append(lines, cmdLine)
+
 		} else {
-			lines = append(lines, "", selector+titleText)
-			lines = append(lines, dimStyle.Render("  "+truncate(compat.SanitizeMetadata(preview.Command), width-2)))
-			if preview.Description != "" {
-				lines = append(lines, indent(dimStyle.Render(wrap(compat.SanitizeMetadata(preview.Description), width-2)), "  "))
-			}
+			// Unselected Action (normal colors, subordinate metadata very dim)
+			titleLine := normalActionTitleStyle.Render(selector + titleText)
+			lines = append(lines, "", titleLine)
+
+			cmdText := truncate(compat.SanitizeMetadata(preview.Command), width-4)
+			cmdLine := normalActionSubStyle.Render("  "+cmdText)
+			lines = append(lines, cmdLine)
 		}
 	}
 	return lines
+}
+
+func padRight(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
 }
 
 func (m appModel) renderActionResult(width int) []string {
@@ -1156,7 +1230,7 @@ func (m appModel) footer() string {
 	if m.searching {
 		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("SEARCH MODE") + " : type to filter, esc/enter to leave"
 	} else if m.commands {
-		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render("ACTION MODE") + " : j/k choose, enter run, c hide"
+		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render("ACTION MODE") + " : j/k choose, enter run, c/esc close"
 	}
 	return dimStyle.Render("LazySkills "+appVersion) + selection + mode
 }
@@ -1203,42 +1277,26 @@ func sortSkills(skills []*model.Skill) {
 }
 
 func (m appModel) agentFilters() []string {
-	observed := map[string]bool{}
-	for _, skill := range m.result.Skills {
-		for _, path := range skill.ObservedPaths {
-			observed[path.Agent] = true
-		}
-	}
+	var detected []string
 	if len(m.result.Agents) == 0 {
-		ids := make([]string, 0, len(observed))
-		for agent := range observed {
-			if agent != "" && agent != "universal" {
-				ids = append(ids, agent)
+		for _, agent := range agents.DetectInstalled(m.cwd) {
+			if agent.Name == "universal" {
+				continue
 			}
-		}
-		sort.Strings(ids)
-		if len(ids) > 0 {
-			return ids
-		}
-		return supportedAgentIDs()
-	}
-	detected, rest := []string{}, []string{}
-	for _, agent := range m.result.Agents {
-		if agent.Name == "universal" {
-			continue
-		}
-		if agent.Detected || observed[agent.Name] {
 			detected = append(detected, agent.Name)
-		} else {
-			rest = append(rest, agent.Name)
+		}
+	} else {
+		for _, agent := range m.result.Agents {
+			if agent.Name == "universal" {
+				continue
+			}
+			if agent.Detected {
+				detected = append(detected, agent.Name)
+			}
 		}
 	}
 	sort.Strings(detected)
-	sort.Strings(rest)
-	if len(detected) > 0 {
-		return detected
-	}
-	return append(detected, rest...)
+	return detected
 }
 
 func supportedAgentIDs() []string {
@@ -1311,6 +1369,9 @@ func agentVisibilityBadge(sk *model.Skill, agent string) string {
 
 func (m appModel) agentLabel() string {
 	if m.agent == "" {
+		if len(m.agentFilters()) == 0 {
+			return "all (none detected)"
+		}
 		return "all"
 	}
 	for _, agent := range agents.InitialAgents() {
