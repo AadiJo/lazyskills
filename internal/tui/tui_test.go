@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"lazyskills/internal/display"
 	"lazyskills/internal/model"
 	"lazyskills/internal/runner"
 )
@@ -180,7 +181,7 @@ func TestActiveAgentVisibilityReasonIsRendered(t *testing.T) {
 		Visibility:  []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
 	}}}}
 	out := m.View()
-	if !strings.Contains(out, "Build") || !strings.Contains(out, "Claude Code cannot see") || !strings.Contains(out, "missing_agent_link") {
+	if !strings.Contains(out, "Build") || !strings.Contains(out, "Claude Code: not linked") {
 		t.Fatalf("expected active agent visibility reason, got %q", out)
 	}
 }
@@ -198,20 +199,27 @@ func TestAgentFilterListMarksNonVisibleSkills(t *testing.T) {
 			Visibility: []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
 		},
 	}}}
-	out := m.View()
-	if !strings.Contains(out, "Visible [project] ✓ visible") || !strings.Contains(out, "Missing [project] × missing_agent") {
+	out := m.listPane(20, 80)
+	if !strings.Contains(out, "Visible [P] ✓") || !strings.Contains(out, "Missing [P] ×") {
 		t.Fatalf("expected list-level visibility badges, got %q", out)
+	}
+	if strings.Contains(out, "not linked") || strings.Contains(out, "available") {
+		t.Fatalf("expected compact list badges without explanatory text, got %q", out)
 	}
 }
 
-func TestListRendersIssueRowsInRedWithSubtleBadge(t *testing.T) {
+func TestListRendersIssueRowsWithSeverityBadges(t *testing.T) {
 	m := appModel{width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{
 		{Name: "Healthy", Scope: model.ScopeProject},
-		{Name: "Problem", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Message: "missing SKILL.md"}}},
+		{Name: "Warning", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_global_lock", Severity: "warning", Message: "not tracked"}}},
+		{Name: "Error", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Severity: "error", Message: "missing SKILL.md"}}},
 	}}}
-	out := m.View()
-	if !strings.Contains(out, "Problem [project] ⚠ 1") {
-		t.Fatalf("expected subtle issue badge, got %q", out)
+	out := m.listPane(20, 80)
+	if !strings.Contains(out, "Warning [P] ⚠1") {
+		t.Fatalf("expected warning issue badge, got %q", out)
+	}
+	if !strings.Contains(out, "Error [P] !1") {
+		t.Fatalf("expected error issue badge, got %q", out)
 	}
 	if strings.Contains(out, "BROKEN") {
 		t.Fatalf("issue badge should stay subtle, got %q", out)
@@ -632,7 +640,7 @@ func TestGroupedListKeepsSelectedRowVisible(t *testing.T) {
 	}
 	m := appModel{width: 120, height: 10, selected: 11, result: model.ScanResult{Skills: skills}}
 	out := m.View()
-	if !strings.Contains(out, "Skill 11 [project]") {
+	if !strings.Contains(out, "Skill 11 [P]") {
 		t.Fatalf("expected selected row visible with many group headers, got %q", out)
 	}
 }
@@ -848,5 +856,41 @@ func assertRenderedSize(t *testing.T, out string, width, height int) {
 		if got := lipgloss.Width(line); got > width {
 			t.Fatalf("line %d width overflowed: got %d want <= %d\n%s", i, got, width, line)
 		}
+	}
+}
+
+func TestVisibilityReasonTranslation(t *testing.T) {
+	sk := &model.Skill{
+		Name:  "TestSkill",
+		Scope: model.ScopeProject,
+		Visibility: []model.SkillVisibility{
+			{Agent: "claude-code", Display: "Claude Code", Visible: true, Reason: "visible_via_symlink"},
+			{Agent: "opencode", Display: "OpenCode", Visible: false, Reason: "missing_agent_link"},
+			{Agent: "cursor", Display: "Cursor", Visible: false, Reason: "not_in_universal_canonical_dir"},
+		},
+	}
+
+	// List badges stay compact; detail pane carries the explanation.
+	if badge := agentVisibilityBadge(sk, "claude-code"); badge != "✓" {
+		t.Errorf("expected compact available badge, got %q", badge)
+	}
+	if badge := agentVisibilityBadge(sk, "opencode"); badge != "×" {
+		t.Errorf("expected compact unavailable badge, got %q", badge)
+	}
+	if badge := agentVisibilityBadge(sk, "cursor"); badge != "×" {
+		t.Errorf("expected compact unavailable badge, got %q", badge)
+	}
+
+	// Test detail summary translation
+	mAll := appModel{} // agent = ""
+	linesAll := mAll.visibilitySummary(display.Skill(sk), 80)
+	if len(linesAll) != 1 || !strings.Contains(linesAll[0], "Available to 1/3 agents") {
+		t.Errorf("expected all-agents summary, got %v", linesAll)
+	}
+
+	mFiltered := appModel{agent: "claude-code"}
+	linesFiltered := mFiltered.visibilitySummary(display.Skill(sk), 80)
+	if len(linesFiltered) != 1 || !strings.Contains(linesFiltered[0], "Claude Code: available (symlinked)") {
+		t.Errorf("expected filtered agent translation, got %v", linesFiltered)
 	}
 }

@@ -82,6 +82,7 @@ var (
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	warningStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	runExec       = runner.OSRunner{}.Run
 
 	// Action Mode UI Polish Styles
@@ -835,8 +836,8 @@ func (m appModel) filterPane(width int) string {
 		dimStyle.Render(compat.SanitizeMetadata(m.result.Cwd)),
 		"",
 		filterLine("All", m.filter == scopeAll),
-		filterLine(fmt.Sprintf("Project (%d)", counts[model.ScopeProject]), m.filter == scopeProject),
-		filterLine(fmt.Sprintf("Global (%d)", counts[model.ScopeGlobal]), m.filter == scopeGlobal),
+		filterLine(fmt.Sprintf("[P]roject (%d)", counts[model.ScopeProject]), m.filter == scopeProject),
+		filterLine(fmt.Sprintf("[G]lobal (%d)", counts[model.ScopeGlobal]), m.filter == scopeGlobal),
 		"",
 		fmt.Sprintf("Skills: %d", len(m.result.Skills)),
 		fmt.Sprintf("Issues: %d", issues),
@@ -868,6 +869,17 @@ func filterLine(label string, active bool) string {
 	return "  " + label
 }
 
+func scopeBadge(scope string) string {
+	switch scope {
+	case string(model.ScopeProject):
+		return "P"
+	case string(model.ScopeGlobal):
+		return "G"
+	default:
+		return compat.SanitizeMetadata(scope)
+	}
+}
+
 func (m appModel) listPane(height, width int) string {
 	items := m.filteredSkills()
 	lines := []string{titleStyle.Render("Skills")}
@@ -896,18 +908,23 @@ func (m appModel) listPane(height, width int) string {
 		if m.isSelected(skill) {
 			mark = "● "
 		}
-		label := fmt.Sprintf("%s%s [%s]", mark, view.Name, view.Scope)
+		label := fmt.Sprintf("%s%s [%s]", mark, view.Name, scopeBadge(view.Scope))
 		if m.agent != "" {
 			label += " " + agentVisibilityBadge(items[i], m.agent)
 		}
-		if len(view.HealthIssues) > 0 {
-			label += fmt.Sprintf(" ⚠ %d", len(view.HealthIssues))
+		issueErrors, issueWarnings := healthIssueCounts(view.HealthIssues)
+		if issueErrors > 0 {
+			label += fmt.Sprintf(" !%d", issueErrors)
+		} else if issueWarnings > 0 {
+			label += fmt.Sprintf(" ⚠%d", issueWarnings)
 		}
 		var line string
 		if i == m.selected {
 			line = selectedStyle.Render(truncate(label, width))
-		} else if len(view.HealthIssues) > 0 {
+		} else if issueErrors > 0 {
 			line = errorStyle.Render(truncate(label, width))
+		} else if issueWarnings > 0 {
+			line = warningStyle.Render(truncate(label, width))
 		} else {
 			line = truncate(label, width)
 		}
@@ -930,6 +947,17 @@ func (m appModel) listPane(height, width int) string {
 type listRow struct {
 	line       string
 	skillIndex int
+}
+
+func healthIssueCounts(issues []display.HealthIssueView) (errors int, warnings int) {
+	for _, issue := range issues {
+		if issue.Severity == "error" {
+			errors++
+		} else {
+			warnings++
+		}
+	}
+	return errors, warnings
 }
 
 func (m appModel) detailPane() string {
@@ -1028,11 +1056,29 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			if visibility.Agent != m.agent {
 				continue
 			}
-			prefix := "cannot see"
+			statusText := "not linked"
 			if visibility.Visible {
-				prefix = "can see"
+				statusText = "available"
 			}
-			val := fmt.Sprintf("%s %s (%s)", visibility.Display, prefix, visibility.Reason)
+			switch visibility.Reason {
+			case "visible_via_universal_canonical", "visible_via_canonical":
+				statusText = "available (canonical)"
+			case "visible_via_symlink":
+				statusText = "available (symlinked)"
+			case "visible_via_copy":
+				statusText = "available (copied)"
+			case "broken_symlink":
+				statusText = "broken link"
+			case "unsupported_global":
+				statusText = "global unsupported"
+			case "agent_not_detected":
+				statusText = "agent not detected"
+			case "not_in_universal_canonical_dir":
+				statusText = "not in shared folder"
+			case "missing_agent_link":
+				statusText = "not linked"
+			}
+			val := fmt.Sprintf("%s: %s", visibility.Display, statusText)
 			if visibility.Path != "" {
 				val += " at " + visibility.Path
 			}
@@ -1046,7 +1092,7 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			visible++
 		}
 	}
-	val := fmt.Sprintf("%d/%d supported agents", visible, len(view.Visibility))
+	val := fmt.Sprintf("Available to %d/%d agents", visible, len(view.Visibility))
 	return []string{formatMetaLine("Visibility:", val, width)}
 }
 
@@ -1357,14 +1403,14 @@ func agentVisibilityBadge(sk *model.Skill, agent string) string {
 			continue
 		}
 		if visibility.Visible {
-			return "✓ visible"
+			return "✓"
 		}
-		return "× " + compat.SanitizeMetadata(visibility.Reason)
+		return "×"
 	}
 	if skillObservedByAgent(sk, agent) {
-		return "✓ observed"
+		return "✓"
 	}
-	return "× no data"
+	return "×"
 }
 
 func (m appModel) agentLabel() string {
