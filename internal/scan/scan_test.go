@@ -86,6 +86,27 @@ func TestClaudeProjectDir(t *testing.T) {
 	}
 }
 
+func TestHiddenSkillDirectoriesAreIgnored(t *testing.T) {
+	home := withHome(t)
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills", ".system"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, filepath.Join(home, ".codex", "skills", "review"), "Review", "Review code")
+	res, err := Run(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range res.Skills {
+		if skill.Name == ".system" {
+			t.Fatalf("expected hidden .system directory to be ignored, got %#v", skill)
+		}
+	}
+	if len(res.Skills) != 1 || res.Skills[0].Name != "Review" {
+		t.Fatalf("expected only normal skill, got %#v", res.Skills)
+	}
+}
+
 func TestLocksCorrelateBySkillName(t *testing.T) {
 	home := withHome(t)
 	cwd := t.TempDir()

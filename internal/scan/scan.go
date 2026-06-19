@@ -185,6 +185,9 @@ func scanLocation(loc agents.Location, skills map[string]*model.Skill) {
 		return
 	}
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
 		path := filepath.Join(loc.Root, entry.Name())
 		info, err := os.Lstat(path)
 		if err != nil {

@@ -729,7 +729,7 @@ func listGroupLabel(skill *model.Skill) string {
 	if label := sourceGroupLabel(skill); label != "" {
 		return label
 	}
-	return "No source metadata"
+	return "Custom / untracked"
 }
 
 type skillSourceInfo struct {
@@ -909,7 +909,11 @@ func scopeBadge(scope string) string {
 
 func (m appModel) listPane(height, width int) string {
 	items := m.filteredSkills()
-	lines := []string{titleStyle.Render("Skills")}
+	title := "All Skills"
+	if m.agent != "" {
+		title = m.agentLabel() + " Skills"
+	}
+	lines := []string{titleStyle.Render(title)}
 	if len(items) == 0 {
 		detail := "No skills match."
 		if m.agent != "" {
@@ -935,25 +939,35 @@ func (m appModel) listPane(height, width int) string {
 		if m.isSelected(skill) {
 			mark = "● "
 		}
-		label := fmt.Sprintf("%s%s [%s]", mark, view.Name, scopeBadge(view.Scope))
+		coreLabel := fmt.Sprintf("%s%s [%s]", mark, view.Name, scopeBadge(view.Scope))
 		if m.agent != "" {
-			label += " " + agentVisibilityBadge(items[i], m.agent)
+			coreLabel += " " + agentVisibilityBadge(items[i], m.agent)
 		}
 		issueErrors, issueWarnings := healthIssueCounts(view.HealthIssues)
+		badgeLen := 0
 		if issueErrors > 0 {
-			label += fmt.Sprintf(" !%d", issueErrors)
+			badgeLen = len(fmt.Sprintf(" !%d", issueErrors))
 		} else if issueWarnings > 0 {
-			label += fmt.Sprintf(" ⚠ %d", issueWarnings)
+			badgeLen = len(fmt.Sprintf(" ⚠ %d", issueWarnings))
 		}
+		truncatedCore := truncate(coreLabel, width-badgeLen)
 		var line string
 		if i == m.selected {
-			line = selectedStyle.Render(truncate(label, width))
+			badge := ""
+			if issueErrors > 0 {
+				badge = fmt.Sprintf(" !%d", issueErrors)
+			} else if issueWarnings > 0 {
+				badge = fmt.Sprintf(" ⚠ %d", issueWarnings)
+			}
+			line = selectedStyle.Render(truncatedCore + badge)
 		} else if issueErrors > 0 {
-			line = errorStyle.Render(truncate(label, width))
+			badge := errorStyle.Render(fmt.Sprintf(" !%d", issueErrors))
+			line = errorStyle.Render(truncatedCore) + badge
 		} else if issueWarnings > 0 {
-			line = warningStyle.Render(truncate(label, width))
+			badge := warningStyle.Render(fmt.Sprintf(" ⚠ %d", issueWarnings))
+			line = truncatedCore + badge
 		} else {
-			line = truncate(label, width)
+			line = truncatedCore
 		}
 		if i == m.selected {
 			selectedRow = len(rows)
@@ -985,6 +999,44 @@ func healthIssueCounts(issues []display.HealthIssueView) (errors int, warnings i
 		}
 	}
 	return errors, warnings
+}
+
+func humanHealthIssueType(issueType string) string {
+	switch issueType {
+	case "missing_skill_md":
+		return "Missing SKILL.md"
+	case "invalid_frontmatter":
+		return "Invalid Frontmatter"
+	case "broken_symlink":
+		return "Broken Symlink"
+	case "missing_project_lock":
+		return "Not Tracked in Project"
+	case "missing_global_lock":
+		return "Not Tracked in Global"
+	case "ghost_agent_skill":
+		return "Agent-specific skill"
+	case "duplicate_name":
+		return "Duplicate Name"
+	case "project_global_shadowing":
+		return "Name Conflict"
+	case "lock_without_files":
+		return "Lock Entry Missing Files"
+	default:
+		return strings.ReplaceAll(issueType, "_", " ")
+	}
+}
+
+func humanHealthIssueMessage(issueType, message string) string {
+	switch issueType {
+	case "ghost_agent_skill":
+		return "This skill is custom/untracked and only installed for specific agents."
+	case "missing_project_lock":
+		return "This skill is not tracked by the project lock."
+	case "missing_global_lock":
+		return "This skill is not tracked by the global lock."
+	default:
+		return message
+	}
 }
 
 func (m appModel) detailPane() string {
@@ -1060,7 +1112,7 @@ func (m appModel) detailLines(width int) []string {
 		}
 		lines = append(lines, "", headerStyle.Render(header))
 		for _, issue := range view.HealthIssues {
-			line := fmt.Sprintf("- %s: %s", issue.Type, issue.Message)
+			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
 			if issue.Path != "" {
 				line += " (" + issue.Path + ")"
 			}
@@ -1123,6 +1175,25 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			return []string{formatMetaLine("Visibility:", val, width)}
 		}
 		return []string{formatMetaLine("Visibility:", "no compatibility data for "+m.agentLabel(), width)}
+	}
+	if view.CanonicalPath == "" {
+		observedAgents := []string{}
+		for _, p := range view.Observed {
+			if p.Agent != "" {
+				displayName := p.Agent
+				for _, state := range m.result.Agents {
+					if state.Name == p.Agent {
+						displayName = state.Display
+						break
+					}
+				}
+				observedAgents = append(observedAgents, displayName)
+			}
+		}
+		if len(observedAgents) > 0 {
+			val := "Agent-specific: " + strings.Join(observedAgents, ", ")
+			return []string{formatMetaLine("Visibility:", val, width)}
+		}
 	}
 	detected := m.detectedAgentSet()
 	visible := 0
@@ -1442,6 +1513,9 @@ func skillRelevantToAgent(sk *model.Skill, agent string) bool {
 	if skillObservedByAgent(sk, agent) {
 		return true
 	}
+	if sk.CanonicalPath == "" {
+		return false
+	}
 	for _, visibility := range sk.Visibility {
 		if visibility.Agent == agent {
 			return true
@@ -1456,12 +1530,12 @@ func agentVisibilityBadge(sk *model.Skill, agent string) string {
 			continue
 		}
 		if visibility.Visible {
-			return "✓"
+			return successStyle.Render("✓")
 		}
 		return "×"
 	}
 	if skillObservedByAgent(sk, agent) {
-		return "✓"
+		return successStyle.Render("✓")
 	}
 	return "×"
 }

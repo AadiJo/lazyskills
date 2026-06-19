@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"lazyskills/internal/compat"
 	"lazyskills/internal/display"
 	"lazyskills/internal/model"
 	"lazyskills/internal/runner"
@@ -56,6 +57,17 @@ func TestAgentFilterLimitsVisibleSkills(t *testing.T) {
 	items := m.filteredSkills()
 	if len(items) != 1 || items[0].Name != "OpenCode Skill" {
 		t.Fatalf("unexpected filtered skills: %#v", items)
+	}
+}
+
+func TestListTitleReflectsAgentFilter(t *testing.T) {
+	m := appModel{result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
+	if out := m.listPane(20, 80); !strings.Contains(out, "All Skills") {
+		t.Fatalf("expected all-skills title, got %q", out)
+	}
+	m.agent = "opencode"
+	if out := m.listPane(20, 80); !strings.Contains(out, "OpenCode Skills") {
+		t.Fatalf("expected agent-specific title, got %q", out)
 	}
 }
 
@@ -209,10 +221,11 @@ func TestCommandPreviewModeRendersWithoutExecuting(t *testing.T) {
 
 func TestActiveAgentVisibilityReasonIsRendered(t *testing.T) {
 	m := appModel{width: 120, height: 32, agent: "claude-code", result: model.ScanResult{Skills: []*model.Skill{{
-		Name:        "Build",
-		Description: "desc",
-		Scope:       model.ScopeProject,
-		Visibility:  []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
+		Name:          "Build",
+		Description:   "desc",
+		Scope:         model.ScopeProject,
+		CanonicalPath: "/tmp/build",
+		Visibility:    []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
 	}}}}
 	out := m.View()
 	if !strings.Contains(out, "Build") || !strings.Contains(out, "Claude Code: not linked") {
@@ -223,17 +236,19 @@ func TestActiveAgentVisibilityReasonIsRendered(t *testing.T) {
 func TestAgentFilterListMarksNonVisibleSkills(t *testing.T) {
 	m := appModel{width: 120, height: 32, agent: "claude-code", result: model.ScanResult{Skills: []*model.Skill{
 		{
-			Name:       "Visible",
-			Scope:      model.ScopeProject,
-			Visibility: []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: true, Reason: "visible_via_symlink"}},
+			Name:          "Visible",
+			Scope:         model.ScopeProject,
+			CanonicalPath: "/tmp/visible",
+			Visibility:    []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: true, Reason: "visible_via_symlink"}},
 		},
 		{
-			Name:       "Missing",
-			Scope:      model.ScopeProject,
-			Visibility: []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
+			Name:          "Missing",
+			Scope:         model.ScopeProject,
+			CanonicalPath: "/tmp/missing",
+			Visibility:    []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
 		},
 	}}}
-	out := m.listPane(20, 80)
+	out := compat.StripTerminalEscapes(m.listPane(20, 80))
 	if !strings.Contains(out, "Visible [P] ✓") || !strings.Contains(out, "Missing [P] ×") {
 		t.Fatalf("expected list-level visibility badges, got %q", out)
 	}
@@ -638,7 +653,7 @@ func TestSkillListSeparatesNoSourceMetadata(t *testing.T) {
 		{Name: "Manual", Scope: model.ScopeProject},
 	}}}
 	out := m.View()
-	if !strings.Contains(out, "─ owner/repo") || !strings.Contains(out, "─ No source metadata") {
+	if !strings.Contains(out, "─ owner/repo") || !strings.Contains(out, "─ Custom / untracked") {
 		t.Fatalf("expected explicit source and no-source groups, got %q", out)
 	}
 }
@@ -915,7 +930,7 @@ func TestVisibilityReasonTranslation(t *testing.T) {
 	}
 
 	// List badges stay compact; detail pane carries the explanation.
-	if badge := agentVisibilityBadge(sk, "claude-code"); badge != "✓" {
+	if badge := compat.StripTerminalEscapes(agentVisibilityBadge(sk, "claude-code")); badge != "✓" {
 		t.Errorf("expected compact available badge, got %q", badge)
 	}
 	if badge := agentVisibilityBadge(sk, "opencode"); badge != "×" {
