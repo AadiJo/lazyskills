@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"lazyskills/internal/actions"
 	"lazyskills/internal/compat"
 	"lazyskills/internal/display"
 	"lazyskills/internal/model"
@@ -61,13 +62,21 @@ func TestAgentFilterLimitsVisibleSkills(t *testing.T) {
 }
 
 func TestListTitleReflectsAgentFilter(t *testing.T) {
-	m := appModel{result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
-	if out := m.listPane(20, 80); !strings.Contains(out, "All Skills") {
-		t.Fatalf("expected all-skills title, got %q", out)
+	m := appModel{width: 100, height: 20, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
+	if title := m.listTitle(); !strings.Contains(title, "1 Skills") {
+		t.Fatalf("expected all-skills title, got %q", title)
+	}
+	out := m.View()
+	if !strings.Contains(out, "1 Skills") {
+		t.Fatalf("expected view to contain all-skills title in border, got %q", out)
 	}
 	m.agent = "opencode"
-	if out := m.listPane(20, 80); !strings.Contains(out, "OpenCode Skills") {
-		t.Fatalf("expected agent-specific title, got %q", out)
+	if title := m.listTitle(); !strings.Contains(title, "1 Skills (OpenCode)") {
+		t.Fatalf("expected agent-specific title, got %q", title)
+	}
+	out = m.View()
+	if !strings.Contains(out, "1 Skills (OpenCode)") {
+		t.Fatalf("expected view to contain agent-specific title in border, got %q", out)
 	}
 }
 
@@ -138,7 +147,7 @@ func TestAgentFilterCanSelectSupportedAgentWithNoSkills(t *testing.T) {
 		t.Fatalf("expected no skills for claude-code, got %#v", items)
 	}
 	out := m.View()
-	if !strings.Contains(out, "Claude Code") || !strings.Contains(out, "has no visible skills") {
+	if !strings.Contains(out, "Claude Code") || !strings.Contains(out, "No skills matched") {
 		t.Fatalf("expected zero-skill agent empty state, got %q", out)
 	}
 }
@@ -320,7 +329,6 @@ func TestConfirmationAcceptsDefaultYAndYes(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"default_enter", ""},
 		{"y", "y"},
 		{"yes", "yes"},
 	}
@@ -353,6 +361,29 @@ func TestConfirmationAcceptsDefaultYAndYes(t *testing.T) {
 	}
 }
 
+func TestConfirmationRejectsEmptyInput(t *testing.T) {
+	called := false
+	old := runExec
+	runExec = func(spec runner.ExecSpec) runner.Result { called = true; return runner.Result{ExitCode: 0} }
+	t.Cleanup(func() { runExec = old })
+
+	m := actionTestModel(t.TempDir())
+	m.commands = true
+	m.action = actionIndex(t, m, "Reinstall/update selected skill")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+
+	// Just press Enter with empty/whitespace input
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if cmd != nil || m.running || !m.confirming {
+		t.Fatalf("expected empty/whitespace input to be rejected, running=%v confirming=%v cmd=%v", m.running, m.confirming, cmd)
+	}
+	if called {
+		t.Fatalf("expected command execution to not occur")
+	}
+}
+
 func TestConfirmationRendersCenteredModal(t *testing.T) {
 	m := actionTestModel(t.TempDir())
 	m.commands = true
@@ -360,7 +391,7 @@ func TestConfirmationRendersCenteredModal(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
 	out := m.View()
-	if !strings.Contains(out, "Confirm") || !strings.Contains(out, "Press Enter or y to confirm") || strings.Contains(out, "Bulk actions") {
+	if !strings.Contains(out, "Confirm") || !strings.Contains(out, "press Enter to confirm") || strings.Contains(out, "Bulk actions") {
 		t.Fatalf("expected standalone confirmation modal, got %q", out)
 	}
 }
@@ -658,7 +689,7 @@ func TestSkillListSeparatesNoSourceMetadata(t *testing.T) {
 	}
 }
 
-func TestLeftRightJumpSourceGroupsWithoutChangingScope(t *testing.T) {
+func TestBracketJumpSourceGroupsWithoutChangingScope(t *testing.T) {
 	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
 		{Name: "One", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/one"}},
 		{Name: "Two", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/one"}},
@@ -666,29 +697,148 @@ func TestLeftRightJumpSourceGroupsWithoutChangingScope(t *testing.T) {
 		{Name: "Manual", Scope: model.ScopeProject},
 	}}}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
 	next := updated.(appModel)
 	if next.filter != scopeAll || next.selected != 2 {
-		t.Fatalf("expected right arrow to jump to next source group without changing scope, filter=%d selected=%d", next.filter, next.selected)
+		t.Fatalf("expected ] to jump to next source group without changing scope, filter=%d selected=%d", next.filter, next.selected)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
 	next = updated.(appModel)
 	if next.filter != scopeAll || next.selected != 0 {
-		t.Fatalf("expected left arrow to jump to previous source group without changing scope, filter=%d selected=%d", next.filter, next.selected)
+		t.Fatalf("expected [ to jump to previous source group without changing scope, filter=%d selected=%d", next.filter, next.selected)
 	}
 }
 
-func TestTabChangesScopeFilter(t *testing.T) {
+func TestPaneFocusAndScroll(t *testing.T) {
+	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject},
+		{Name: "Two", Scope: model.ScopeProject},
+	}}}
+
+	if m.detailsFocused {
+		t.Fatal("expected detailsFocused to start false")
+	}
+
+	// Press 2 to focus metadata/details area.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	next := updated.(appModel)
+	if !next.detailsFocused {
+		t.Fatal("expected detailsFocused to be true after pressing 2")
+	}
+
+	// Press 1 to return to skills list.
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	next = updated.(appModel)
+	if next.detailsFocused {
+		t.Fatal("expected detailsFocused to be false after pressing 1")
+	}
+}
+
+func TestScopeFilterKeys(t *testing.T) {
 	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
 		{Name: "Project", Scope: model.ScopeProject},
 		{Name: "Global", Scope: model.ScopeGlobal},
 	}}}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Test 'f' cycles scope All -> Project -> Global -> All
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	next := updated.(appModel)
 	if next.filter != scopeProject {
-		t.Fatalf("expected tab to switch to project scope, got %d", next.filter)
+		t.Fatalf("expected f to switch to project scope, got %d", next.filter)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next = updated.(appModel)
+	if next.filter != scopeGlobal {
+		t.Fatalf("expected f to switch to global scope, got %d", next.filter)
+	}
+
+	// Test 'F' resets scope to All
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	next = updated.(appModel)
+	if next.filter != scopeAll {
+		t.Fatalf("expected F to reset scope to All, got %d", next.filter)
+	}
+
+	// Test 'P' sets Project-only
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	next = updated.(appModel)
+	if next.filter != scopeProject {
+		t.Fatalf("expected P to set project scope, got %d", next.filter)
+	}
+
+	// Test 'G' sets Global-only
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	next = updated.(appModel)
+	if next.filter != scopeGlobal {
+		t.Fatalf("expected G to set global scope, got %d", next.filter)
+	}
+}
+
+func TestFocusControls(t *testing.T) {
+	m := appModel{width: 120, height: 32}
+
+	if m.detailsFocused {
+		t.Fatal("expected detailsFocused to start false")
+	}
+
+	// '2' focuses details
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(appModel)
+	if !m.detailsFocused {
+		t.Fatal("expected 2 to focus details")
+	}
+
+	// '1' focuses list
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(appModel)
+	if m.detailsFocused {
+		t.Fatal("expected 1 to focus list")
+	}
+
+	// 'tab' cycles focus
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(appModel)
+	if !m.detailsFocused {
+		t.Fatal("expected tab to cycle focus")
+	}
+
+	// 'shift+tab' cycles focus back
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = updated.(appModel)
+	if m.detailsFocused {
+		t.Fatal("expected shift+tab to cycle focus")
+	}
+}
+
+func TestEnterSkillModal(t *testing.T) {
+	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject},
+	}}}
+
+	// Press Enter to open modal
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if !m.detailModal {
+		t.Fatal("expected enter to open skill detail modal")
+	}
+
+	// Render modal view
+	out := m.View()
+	if !strings.Contains(out, "Skill Detail View") {
+		t.Fatalf("expected modal title in View, got %s", out)
+	}
+
+	// Scroll down in modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(appModel)
+
+	// Press Esc to close modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(appModel)
+	if m.detailModal {
+		t.Fatal("expected esc to close modal")
 	}
 }
 
@@ -826,10 +976,10 @@ func TestDetailPaneClipsLongPreview(t *testing.T) {
 	preview := strings.Repeat("line\n", 80)
 	m := appModel{width: 100, height: 20, result: model.ScanResult{Skills: []*model.Skill{{Name: "Long", Description: "desc", Scope: model.ScopeProject, Preview: preview}}}}
 	m.syncViewport()
-	out := m.detailPane()
+	out := m.previewViewport.View()
 	lines := strings.Split(out, "\n")
-	if len(lines) > m.viewport.Height {
-		t.Fatalf("detail pane overflowed: got %d lines\n%s", len(lines), out)
+	if len(lines) > m.previewViewport.Height {
+		t.Fatalf("preview pane overflowed: got %d lines\n%s", len(lines), out)
 	}
 }
 
@@ -839,13 +989,113 @@ func TestDetailScrollKeysMoveViewport(t *testing.T) {
 	m.syncViewport()
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	next := updated.(appModel)
-	if next.viewport.YOffset <= 0 {
-		t.Fatalf("expected detail scroll to move down, got %d", next.viewport.YOffset)
+	if next.previewViewport.YOffset <= 0 {
+		t.Fatalf("expected preview scroll to move down, got %d", next.previewViewport.YOffset)
 	}
 	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyHome})
 	next = updated.(appModel)
-	if next.viewport.YOffset != 0 {
-		t.Fatalf("expected home to reset detail scroll, got %d", next.viewport.YOffset)
+	if next.previewViewport.YOffset != 0 {
+		t.Fatalf("expected home to reset preview scroll, got %d", next.previewViewport.YOffset)
+	}
+}
+
+func TestThreePaneLayoutFocusAndScroll(t *testing.T) {
+	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject, Preview: "preview content", LocalLock: &model.LocalLockEntry{Source: "owner/one"}},
+		{Name: "Two", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/two"}},
+	}}}
+	m.syncViewport()
+
+	// Initial focus is focusSkills (0)
+	if m.focus != focusSkills {
+		t.Fatalf("expected initial focus to be focusSkills, got %v", m.focus)
+	}
+
+	// In Skills focus, h/l or left/right jump source groups instead of changing focus.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(appModel)
+	if m.focus != focusSkills || m.selected != 1 {
+		t.Fatalf("expected right in skills focus to jump source group, got focus %v selection %d", m.focus, m.selected)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(appModel)
+	if m.focus != focusSkills || m.selected != 0 {
+		t.Fatalf("expected left in skills focus to jump source group back, got focus %v selection %d", m.focus, m.selected)
+	}
+
+	// Press 2 to focus Metadata
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(appModel)
+	if m.focus != focusMetadata {
+		t.Fatalf("expected 2 to focus metadata, got %v", m.focus)
+	}
+
+	// Press 3 to focus Preview
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(appModel)
+	if m.focus != focusPreview {
+		t.Fatalf("expected 3 to focus preview, got %v", m.focus)
+	}
+
+	// Press tab to cycle: Preview -> Skills
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(appModel)
+	if m.focus != focusSkills {
+		t.Fatalf("expected tab cycle to Skills, got %v", m.focus)
+	}
+
+	// Press shift+tab to cycle backward: Skills -> Preview
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = updated.(appModel)
+	if m.focus != focusPreview {
+		t.Fatalf("expected shift+tab cycle to Preview, got %v", m.focus)
+	}
+
+	// Press left to cycle backward: Preview -> Metadata
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(appModel)
+	if m.focus != focusMetadata {
+		t.Fatalf("expected left cycle to Metadata, got %v", m.focus)
+	}
+
+	// Press right to cycle forward: Metadata -> Preview
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(appModel)
+	if m.focus != focusPreview {
+		t.Fatalf("expected right cycle to Preview, got %v", m.focus)
+	}
+
+	// h/l should never change focus outside the Skills pane.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m = updated.(appModel)
+	if m.focus != focusPreview {
+		t.Fatalf("expected h to keep Preview focus, got %v", m.focus)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = updated.(appModel)
+	if m.focus != focusPreview {
+		t.Fatalf("expected l to keep Preview focus, got %v", m.focus)
+	}
+
+	// In Preview focus, scrolling j/k should change previewViewport offset, not skill selection
+	m.selected = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(appModel)
+	if m.selected != 0 {
+		t.Fatalf("expected preview scroll to not change skill selection, got selection %d", m.selected)
+	}
+
+	// Check View output has border titles
+	out := m.View()
+	if !strings.Contains(out, "1 Skills") || !strings.Contains(out, "2 Metadata") || !strings.Contains(out, "3 Preview") {
+		t.Fatalf("expected border titles in View, got:\n%s", out)
+	}
+
+	// Enter opens modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if !m.detailModal {
+		t.Fatal("expected enter to open modal")
 	}
 }
 
@@ -960,5 +1210,129 @@ func TestVisibilityReasonTranslation(t *testing.T) {
 	linesFiltered := mFiltered.visibilitySummary(display.Skill(sk), 80)
 	if len(linesFiltered) != 1 || !strings.Contains(linesFiltered[0], "Claude Code: available (symlinked)") {
 		t.Errorf("expected filtered agent translation, got %v", linesFiltered)
+	}
+}
+
+func TestStaticUpdateAwarenessDisclaimers(t *testing.T) {
+	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{{
+		Name: "One", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo", ComputedHash: "abcdef123456"},
+	}}}}
+	out := m.View()
+	if !strings.Contains(out, "Hash:") || !strings.Contains(out, "abcdef123456") {
+		t.Fatalf("expected lock hash in metadata, got: %s", out)
+	}
+	if !strings.Contains(out, "Live update status is not checked here") {
+		t.Fatalf("expected live update status disclaimer, got: %s", out)
+	}
+}
+
+func TestDetailsOnboardingEmptyState(t *testing.T) {
+	mEmpty := appModel{
+		result: model.ScanResult{
+			Skills: []*model.Skill{},
+		},
+	}
+	lines := mEmpty.detailLines(80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Welcome to LazySkills!") || !strings.Contains(joined, "No skills were found") {
+		t.Fatalf("expected onboarding instructions in details pane, got %q", joined)
+	}
+
+	mMissingDeps := appModel{
+		result: model.ScanResult{
+			Skills: []*model.Skill{},
+			Preflight: &model.Preflight{
+				CanRunSkills: false,
+				Tools: map[string]model.ToolStatus{
+					"skills": {Exists: false},
+					"npx":    {Exists: false},
+					"node":   {Exists: false},
+					"npm":    {Exists: false},
+				},
+			},
+		},
+	}
+	linesMissing := mMissingDeps.detailLines(80)
+	joinedMissing := strings.Join(linesMissing, "\n")
+	if !strings.Contains(joinedMissing, "Dependency Issue") || !strings.Contains(joinedMissing, "skills: missing") {
+		t.Fatalf("expected dependency error details, got %q", joinedMissing)
+	}
+}
+
+func TestSkillsFindTriggersRescan(t *testing.T) {
+	m := appModel{}
+	previews := m.currentActions()
+	var findAct *actions.CommandPreview
+	for _, p := range previews {
+		if p.ID == "skills_find" {
+			findAct = &p
+			break
+		}
+	}
+	if findAct == nil {
+		t.Fatal("expected skills_find action in app-level actions")
+	}
+	if !findAct.Mutates {
+		t.Error("expected skills_find to have Mutates = true to trigger TUI rescan")
+	}
+}
+
+func TestContextualFooterAndHelpModal(t *testing.T) {
+	m := appModel{
+		width:  100,
+		height: 30,
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{Name: "Build", Scope: model.ScopeProject},
+			},
+		},
+	}
+	m.syncViewport()
+
+	// 1. Default footer (Skills focused)
+	outDefault := m.View()
+	if !strings.Contains(outDefault, "enter open · c commands") {
+		t.Fatalf("expected default footer in View, got:\n%s", outDefault)
+	}
+
+	// 2. Metadata focus footer
+	m.focus = focusMetadata
+	outMeta := m.View()
+	if !strings.Contains(outMeta, "scroll metadata") {
+		t.Fatalf("expected metadata footer in View, got:\n%s", outMeta)
+	}
+
+	// 3. Preview focus footer
+	m.focus = focusPreview
+	outPreview := m.View()
+	if !strings.Contains(outPreview, "scroll preview") {
+		t.Fatalf("expected preview footer in View, got:\n%s", outPreview)
+	}
+
+	// 4. Search active footer
+	m.searching = true
+	outSearch := m.View()
+	if !strings.Contains(outSearch, "type search · enter apply") {
+		t.Fatalf("expected search footer in View, got:\n%s", outSearch)
+	}
+	m.searching = false
+
+	// 5. Help modal open
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(appModel)
+	if !m.helpOpen {
+		t.Fatal("expected ? to open help modal")
+	}
+
+	outHelp := m.View()
+	if !strings.Contains(outHelp, "LazySkills Keyboard Help") || !strings.Contains(outHelp, "Navigation & Focus:") {
+		t.Fatalf("expected help modal content in View, got:\n%s", outHelp)
+	}
+
+	// 6. Help modal close with 'q'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(appModel)
+	if m.helpOpen {
+		t.Fatal("expected q to close help modal")
 	}
 }

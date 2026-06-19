@@ -70,6 +70,56 @@ func ForSkillsWithResolver(skills []*model.Skill, resolve SkillsResolver) []Comm
 	return previews
 }
 
+func AppLevelActions() []CommandPreview {
+	return AppLevelActionsWithResolver(ResolveSkillsCommand)
+}
+
+func AppLevelActionsWithResolver(resolve SkillsResolver) []CommandPreview {
+	if resolve == nil {
+		resolve = ResolveSkillsCommand
+	}
+	program, baseArgs := resolve()
+
+	// Check availability: gate if neither skills nor npx is in PATH
+	available, reason := HasSkillsOrNpx()
+
+	previews := []CommandPreview{}
+
+	// skills init
+	initArgs := append([]string{}, baseArgs...)
+	initArgs = append(initArgs, "init")
+	initPreview := newPreview("skills_init", "Initialize skills in project", program, initArgs, "Initialize local skills configuration.", true, true, false, "yes")
+	if !available {
+		initPreview.Available = false
+		initPreview.Reason = reason
+	}
+	previews = append(previews, initPreview)
+
+	// skills find
+	findArgs := append([]string{}, baseArgs...)
+	findArgs = append(findArgs, "find")
+	findPreview := newPreview("skills_find", "Find new skills (interactive)", program, findArgs, "Interactively discover and install skills.", true, false, false, "")
+	if !available {
+		findPreview.Available = false
+		findPreview.Reason = reason
+	} else {
+		findPreview.Exec.Interactive = true
+	}
+	previews = append(previews, findPreview)
+
+	// skills update
+	updateArgs := append([]string{}, baseArgs...)
+	updateArgs = append(updateArgs, "update")
+	updatePreview := newPreview("skills_update", "Update project-local skills", program, updateArgs, "Check for and install updates for project-local skills.", true, true, false, "yes")
+	if !available {
+		updatePreview.Available = false
+		updatePreview.Reason = reason
+	}
+	previews = append(previews, updatePreview)
+
+	return previews
+}
+
 func bulkBatch(skills []*model.Skill, resolve SkillsResolver, actionID string) ([]ExecSpec, bool, string) {
 	batch := make([]ExecSpec, 0, len(skills))
 	for _, skill := range skills {
@@ -99,6 +149,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 	if resolve == nil {
 		resolve = ResolveSkillsCommand
 	}
+	available, reason := HasSkillsOrNpx()
 	previews := []CommandPreview{}
 	if open, ok, reason := openEditorAction(sk); ok {
 		previews = append(previews, open)
@@ -106,7 +157,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 		previews = append(previews, unavailablePreview("Open selected skill", reason))
 	}
 
-	if addSource, skillFilter, ok, reason := addIdentity(sk); ok {
+	if addSource, skillFilter, ok, reasonAdd := addIdentity(sk); ok {
 		program, baseArgs := resolve()
 		args := append([]string{}, baseArgs...)
 		args = append(args, "add", addSource, "--skill", skillFilter, "--yes")
@@ -114,21 +165,30 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 			args = append(args, "-g")
 		}
 		preview := newPreview("reinstall_update", "Reinstall/update selected skill", program, args, "Refresh this skill from its source.", true, true, false, "yes")
+		if !available {
+			preview.Available = false
+			preview.Reason = reason
+		}
 		previews = append(previews, preview)
 	} else {
-		previews = append(previews, unavailablePreview("Reinstall/update selected skill", reason))
+		previews = append(previews, unavailablePreview("Reinstall/update selected skill", reasonAdd))
 	}
 
-	if target, ok, reason := removeIdentity(sk); ok {
+	if target, ok, reasonRemove := removeIdentity(sk); ok {
 		program, baseArgs := resolve()
 		args := append([]string{}, baseArgs...)
 		args = append(args, "remove", target, "--yes")
 		if sk.Scope == model.ScopeGlobal {
 			args = append(args, "-g")
 		}
-		previews = append(previews, newPreview("remove", "Remove selected skill", program, args, "Delete this installed skill.", true, true, true, target))
+		preview := newPreview("remove", "Remove selected skill", program, args, "Delete this installed skill.", true, true, true, target)
+		if !available {
+			preview.Available = false
+			preview.Reason = reason
+		}
+		previews = append(previews, preview)
 	} else {
-		previews = append(previews, unavailablePreview("Remove selected skill", reason))
+		previews = append(previews, unavailablePreview("Remove selected skill", reasonRemove))
 	}
 	return previews
 }
@@ -164,8 +224,20 @@ func openEditorAction(sk *model.Skill) (CommandPreview, bool, string) {
 	return preview, true, ""
 }
 
+var LookPath = exec.LookPath
+
+func HasSkillsOrNpx() (bool, string) {
+	if _, err := LookPath("skills"); err == nil {
+		return true, ""
+	}
+	if _, err := LookPath("npx"); err == nil {
+		return true, ""
+	}
+	return false, "neither 'skills' nor 'npx' is available in your PATH"
+}
+
 func ResolveSkillsCommand() (string, []string) {
-	if _, err := exec.LookPath("skills"); err == nil {
+	if _, err := LookPath("skills"); err == nil {
 		return "skills", nil
 	}
 	return "npx", []string{"--yes", "skills"}

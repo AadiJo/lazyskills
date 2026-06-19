@@ -1,11 +1,18 @@
 package actions
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"lazyskills/internal/model"
 )
+
+func init() {
+	LookPath = func(name string) (string, error) {
+		return "/mock/bin/" + name, nil
+	}
+}
 
 func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
 	t.Setenv("EDITOR", "")
@@ -227,4 +234,57 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestAppLevelActions(t *testing.T) {
+	previews := AppLevelActions()
+	if len(previews) != 3 {
+		t.Fatalf("expected 3 app-level actions, got %d", len(previews))
+	}
+	initAct := previewByTitle(t, previews, "Initialize skills in project")
+	if initAct.ID != "skills_init" || !initAct.Mutates || !initAct.RequiresConfirm {
+		t.Errorf("unexpected skills init preview: %+v", initAct)
+	}
+
+	findAct := previewByTitle(t, previews, "Find new skills (interactive)")
+	if findAct.ID != "skills_find" || !findAct.Mutates || findAct.RequiresConfirm || !findAct.Exec.Interactive {
+		t.Errorf("unexpected skills find preview: %+v", findAct)
+	}
+
+	updateAct := previewByTitle(t, previews, "Update project-local skills")
+	if updateAct.ID != "skills_update" || !updateAct.Mutates || !updateAct.RequiresConfirm {
+		t.Errorf("unexpected skills update preview: %+v", updateAct)
+	}
+}
+
+func TestMissingDepsDisablesActions(t *testing.T) {
+	oldLookPath := LookPath
+	defer func() { LookPath = oldLookPath }()
+
+	// Simulate missing dependencies
+	LookPath = func(name string) (string, error) {
+		return "", os.ErrNotExist
+	}
+
+	sk := &model.Skill{
+		Name:          "Deploy Skill",
+		Scope:         model.ScopeGlobal,
+		CanonicalPath: "/tmp/deploy-skill",
+		GlobalLock:    &model.GlobalLockEntry{Source: "owner/repo", SkillPath: "skills/deploy/SKILL.md", Ref: "v1"},
+	}
+
+	previews := ForSkill(sk)
+	add := previewByTitle(t, previews, "Reinstall/update selected skill")
+	if add.Available {
+		t.Errorf("expected reinstall action to be unavailable when deps are missing")
+	}
+	if !strings.Contains(add.Reason, "neither 'skills' nor 'npx'") {
+		t.Errorf("expected missing dependency reason, got %q", add.Reason)
+	}
+
+	appPreviews := AppLevelActions()
+	appInit := previewByTitle(t, appPreviews, "Initialize skills in project")
+	if appInit.Available {
+		t.Errorf("expected app-level init to be unavailable when deps are missing")
+	}
 }

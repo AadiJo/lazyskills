@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,6 +15,32 @@ import (
 	"lazyskills/internal/locks"
 	"lazyskills/internal/model"
 )
+
+var LookPath = exec.LookPath
+
+func checkPreflight() *model.Preflight {
+	tools := []string{"skills", "npx", "node", "npm"}
+	toolStates := make(map[string]model.ToolStatus)
+	for _, t := range tools {
+		p, err := LookPath(t)
+		toolStates[t] = model.ToolStatus{
+			Exists: err == nil,
+			Path:   p,
+		}
+	}
+
+	canRunSkills := false
+	if toolStates["skills"].Exists {
+		canRunSkills = true
+	} else {
+		canRunSkills = toolStates["npx"].Exists && toolStates["node"].Exists && toolStates["npm"].Exists
+	}
+
+	return &model.Preflight{
+		CanRunSkills: canRunSkills,
+		Tools:        toolStates,
+	}
+}
 
 func Run(cwd string) (model.ScanResult, error) {
 	absCwd, err := filepath.Abs(cwd)
@@ -26,7 +53,12 @@ func Run(cwd string) (model.ScanResult, error) {
 		return model.ScanResult{}, fmt.Errorf("cwd is not a directory: %s", absCwd)
 	}
 
-	res := model.ScanResult{Cwd: absCwd, ProjectLock: locks.ProjectLockPath(absCwd), GlobalLock: locks.GlobalLockPath()}
+	res := model.ScanResult{
+		Cwd:         absCwd,
+		ProjectLock: locks.ProjectLockPath(absCwd),
+		GlobalLock:  locks.GlobalLockPath(),
+		Preflight:   checkPreflight(),
+	}
 	res.Agents = agentStates(absCwd)
 	skills := map[string]*model.Skill{}
 

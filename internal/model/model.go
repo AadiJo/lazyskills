@@ -118,6 +118,18 @@ type Skill struct {
 	HealthIssues  []HealthIssue     `json:"health_issues"`
 }
 
+// ToolStatus represents the location and status of a development tool.
+type ToolStatus struct {
+	Exists bool   `json:"exists"`
+	Path   string `json:"path,omitempty"`
+}
+
+// Preflight details the health and status of critical CLI dependencies.
+type Preflight struct {
+	CanRunSkills bool                  `json:"can_run_skills"`
+	Tools        map[string]ToolStatus `json:"tools"`
+}
+
 // ScanResult is the root schema produced by lazyskills scan --json.
 type ScanResult struct {
 	Cwd          string        `json:"cwd"`
@@ -126,4 +138,5 @@ type ScanResult struct {
 	Agents       []AgentState  `json:"agents,omitempty"`
 	Skills       []*Skill      `json:"skills"`
 	HealthIssues []HealthIssue `json:"health_issues,omitempty"`
+	Preflight    *Preflight    `json:"preflight,omitempty"`
 }

@@ -480,3 +480,81 @@ func TestCorruptLockProducesTopLevelWarningAndJSONEncodes(t *testing.T) {
 		t.Fatalf("result should JSON encode: %v", err)
 	}
 }
+
+func TestPreflightChecking(t *testing.T) {
+	oldLookPath := LookPath
+	defer func() { LookPath = oldLookPath }()
+
+	LookPath = func(name string) (string, error) {
+		if name == "skills" {
+			return "/usr/local/bin/skills", nil
+		}
+		if name == "node" {
+			return "/usr/local/bin/node", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	withHome(t)
+	cwd := t.TempDir()
+	res, err := Run(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Preflight == nil {
+		t.Fatal("expected Preflight to not be nil")
+	}
+
+	if !res.Preflight.CanRunSkills {
+		t.Error("expected CanRunSkills to be true when skills exists")
+	}
+
+	if !res.Preflight.Tools["skills"].Exists || res.Preflight.Tools["skills"].Path != "/usr/local/bin/skills" {
+		t.Errorf("expected skills tool status to reflect exists/path, got %+v", res.Preflight.Tools["skills"])
+	}
+
+	if res.Preflight.Tools["npx"].Exists {
+		t.Error("expected npx to not exist")
+	}
+
+	// Now check when skills does not exist, but npx/node/npm exist
+	LookPath = func(name string) (string, error) {
+		if name == "npx" {
+			return "/usr/local/bin/npx", nil
+		}
+		if name == "node" {
+			return "/usr/local/bin/node", nil
+		}
+		if name == "npm" {
+			return "/usr/local/bin/npm", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	res, err = Run(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Preflight.CanRunSkills {
+		t.Error("expected CanRunSkills to be true when npx, node, npm exist but skills does not")
+	}
+
+	// Now check when skills does not exist and npx exists, but node is missing
+	LookPath = func(name string) (string, error) {
+		if name == "npx" {
+			return "/usr/local/bin/npx", nil
+		}
+		if name == "npm" {
+			return "/usr/local/bin/npm", nil
+		}
+		return "", os.ErrNotExist
+	}
+	res, err = Run(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Preflight.CanRunSkills {
+		t.Error("expected CanRunSkills to be false when npx exists but node is missing")
+	}
+}
