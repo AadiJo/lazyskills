@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strings"
 
-	"lazyskills/internal/agents"
-	"lazyskills/internal/compat"
-	"lazyskills/internal/frontmatter"
-	"lazyskills/internal/locks"
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/agents"
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/frontmatter"
+	"github.com/alvinunreal/lazyskills/internal/locks"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 var LookPath = exec.LookPath

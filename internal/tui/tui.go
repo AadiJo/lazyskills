@@ -14,14 +14,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 
-	"lazyskills/internal/actions"
-	"lazyskills/internal/agents"
-	"lazyskills/internal/compat"
-	"lazyskills/internal/display"
-	"lazyskills/internal/frontmatter"
-	"lazyskills/internal/model"
-	"lazyskills/internal/runner"
-	"lazyskills/internal/scan"
+	"github.com/alvinunreal/lazyskills/internal/actions"
+	"github.com/alvinunreal/lazyskills/internal/agents"
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/display"
+	"github.com/alvinunreal/lazyskills/internal/frontmatter"
+	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/runner"
+	"github.com/alvinunreal/lazyskills/internal/scan"
 )
 
 type scopeFilter int

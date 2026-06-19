@@ -1,0 +1,124 @@
+version: 2
+
+project_name: lazyskills
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lazyskills
+    main: ./cmd/lazyskills
+    binary: lazyskills
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    ids:
+      - lazyskills
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - lazyskills
+    package_name: lazyskills
+    vendor: alvinunreal
+    homepage: https://github.com/alvinunreal/lazyskills
+    maintainer: Alvin <alvinunreal@users.noreply.github.com>
+    description: Mission control for agent skills to stay lazy.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/lazyskills/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/lazyskills/README.md
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  github:
+    owner: alvinunreal
+    name: lazyskills
+  draft: false
+  prerelease: auto
+  mode: replace
+  footer: |
+    ## Installation
+
+    ```bash
+    brew install --cask alvinunreal/tap/lazyskills
+    ```
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/alvinunreal/lazyskills/main/scripts/install.sh | sh
+    ```
+
+homebrew_casks:
+  - name: lazyskills
+    repository:
+      owner: alvinunreal
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/alvinunreal/lazyskills
+    description: Mission control for agent skills to stay lazy.
+    license: MIT
+
+scoops:
+  - name: lazyskills
+    repository:
+      owner: alvinunreal
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: https://github.com/alvinunreal/lazyskills
+    description: Mission control for agent skills to stay lazy.
+    license: MIT

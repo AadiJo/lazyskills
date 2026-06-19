@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"lazyskills/internal/compat"
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 type SkillView struct {

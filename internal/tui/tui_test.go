@@ -12,11 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazyskills/internal/actions"
-	"lazyskills/internal/compat"
-	"lazyskills/internal/display"
-	"lazyskills/internal/model"
-	"lazyskills/internal/runner"
+	"github.com/alvinunreal/lazyskills/internal/actions"
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/display"
+	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/runner"
 )
 
 func TestFilteredSkillsUsesSanitizedSearch(t *testing.T) {

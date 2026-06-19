@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 func ProjectLockPath(cwd string) string {

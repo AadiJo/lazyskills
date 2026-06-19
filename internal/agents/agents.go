@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 type Agent struct {

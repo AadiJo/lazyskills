@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/compat"
 )
 
 const MaxOutputBytes = 32 * 1024

@@ -3,7 +3,7 @@ package compat
 import (
 	"testing"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 func TestSanitizeLockDisplayKeepsRawSeparate(t *testing.T) {

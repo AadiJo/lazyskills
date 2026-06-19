@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 var unsafeNameChars = regexp.MustCompile(`[^a-z0-9._]+`)

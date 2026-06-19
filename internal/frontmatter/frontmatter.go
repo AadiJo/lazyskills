@@ -5,7 +5,7 @@ import (
 	"os"
 	"regexp"
 
-	"lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/compat"
 
 	"gopkg.in/yaml.v3"
 )

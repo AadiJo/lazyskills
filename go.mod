@@ -1,4 +1,4 @@
-module lazyskills
+module github.com/alvinunreal/lazyskills
 
 go 1.26.3
 

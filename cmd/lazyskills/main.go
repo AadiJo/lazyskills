@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"os"
 
-	"lazyskills/internal/scan"
-	"lazyskills/internal/tui"
+	"github.com/alvinunreal/lazyskills/internal/scan"
+	"github.com/alvinunreal/lazyskills/internal/tui"
+)
+
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func main() {
@@ -18,6 +24,10 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Fprintf(os.Stdout, "lazyskills %s\ncommit: %s\nbuilt: %s\n", version, commit, date)
+		return nil
+	}
 	if len(args) == 0 {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -33,7 +43,7 @@ func run(args []string) error {
 			return err
 		}
 		if fs.NArg() > 0 {
-			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills scan --json [--cwd <path>]")
+			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills scan --json [--cwd <path>] | lazyskills version")
 		}
 		if *cwd == "" {
 			var err error

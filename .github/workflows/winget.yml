@@ -1,0 +1,20 @@
+name: Publish to WinGet
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Submit manifest PR to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: alvinunreal.lazyskills
+          installers-regex: 'lazyskills_Windows_.*\.zip'
+          max-versions-to-keep: 5
+          token: ${{ secrets.WINGET_TOKEN }}

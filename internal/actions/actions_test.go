@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 func init() {

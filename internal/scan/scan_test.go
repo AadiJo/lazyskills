@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
 func writeSkill(t *testing.T, dir, name, desc string) {

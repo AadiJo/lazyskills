@@ -36,10 +36,97 @@ It is designed to complement the official `skills` CLI, not replace it.
 ✅ Source/repo-aware selection for grouped workflows  
 ✅ Structured command execution with confirmation, captured output, and rescan after successful mutations
 
-## 🛠️ Install / build
+## 🛠️ Installation
+
+### Homebrew
 
 ```bash
-go build ./cmd/lazyskills
+brew install --cask alvinunreal/tap/lazyskills
+```
+
+### macOS / Linux install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alvinunreal/lazyskills/main/scripts/install.sh | sh
+```
+
+The script installs to `/usr/local/bin` by default and verifies the release checksum. To install somewhere else:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alvinunreal/lazyskills/main/scripts/install.sh | sh -s -- -b ~/.local/bin
+```
+
+### Windows PowerShell
+
+```powershell
+iwr https://raw.githubusercontent.com/alvinunreal/lazyskills/main/scripts/install.ps1 -useb | iex
+```
+
+The PowerShell installer installs to `%LOCALAPPDATA%\Programs\lazyskills\bin` and adds it to your user PATH.
+
+### Windows Scoop
+
+```powershell
+scoop bucket add alvinunreal https://github.com/alvinunreal/scoop-bucket
+scoop install lazyskills
+```
+
+### Windows WinGet
+
+```powershell
+winget install alvinunreal.lazyskills
+```
+
+WinGet availability may lag behind GitHub Releases because new versions are submitted to `microsoft/winget-pkgs` as pull requests.
+
+### Go
+
+```bash
+go install github.com/alvinunreal/lazyskills/cmd/lazyskills@latest
+```
+
+### Nix experimental
+
+Run directly from GitHub:
+
+```bash
+nix run github:alvinunreal/lazyskills
+```
+
+Or from a local checkout:
+
+```bash
+nix run
+```
+
+### Manual download
+
+Download a binary archive from [GitHub Releases](https://github.com/alvinunreal/lazyskills/releases), verify it with `checksums.txt`, and place `lazyskills` on your PATH.
+
+### Linux packages
+
+LazySkills publishes `.deb` and `.rpm` packages for Linux amd64 and arm64 releases.
+
+Debian / Ubuntu:
+
+```bash
+curl -LO https://github.com/alvinunreal/lazyskills/releases/download/v0.1.0/lazyskills_0.1.0_linux_amd64.deb
+sudo apt install ./lazyskills_0.1.0_linux_amd64.deb
+```
+
+Fedora / RHEL / openSUSE:
+
+```bash
+curl -LO https://github.com/alvinunreal/lazyskills/releases/download/v0.1.0/lazyskills_0.1.0_linux_amd64.rpm
+sudo dnf install ./lazyskills_0.1.0_linux_amd64.rpm
+```
+
+Use the `arm64` package instead on ARM Linux machines.
+
+### Build from source
+
+```bash
+go build -o lazyskills ./cmd/lazyskills
 ```
 
 Then run:
@@ -53,6 +140,12 @@ Or scan as JSON:
 ```bash
 ./lazyskills scan --json
 ./lazyskills scan --json --cwd /path/to/project
+```
+
+Check the installed version:
+
+```bash
+lazyskills version
 ```
 
 ## ⌨️ Usage
@@ -114,3 +207,29 @@ The registry is manually ported for now. A generated parity check is a planned f
 go test ./...
 go build ./cmd/lazyskills
 ```
+
+## 🚢 Releases
+
+LazySkills uses [GoReleaser](https://goreleaser.com/) to publish cross-platform binaries, checksums, GitHub Releases, and the Homebrew formula.
+
+Release a new version by pushing a SemVer tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds:
+
+- macOS Intel and Apple Silicon
+- Linux amd64 and arm64
+- Windows amd64 and arm64
+- Linux `.deb` and `.rpm` packages
+
+Nix users can run LazySkills with `nix run github:alvinunreal/lazyskills` once the flake dependency hash is finalized.
+
+Homebrew publishing requires the repository secret `HOMEBREW_TAP_GITHUB_TOKEN` with permission to push to `alvinunreal/homebrew-tap`.
+
+Scoop publishing requires the repository secret `SCOOP_BUCKET_GITHUB_TOKEN` with permission to push to `alvinunreal/scoop-bucket`.
+
+WinGet publishing requires the repository secret `WINGET_TOKEN`, a classic GitHub token with `public_repo` scope. The first WinGet submission may need to be created manually before automated updates are accepted.
