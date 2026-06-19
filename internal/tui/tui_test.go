@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -1302,7 +1303,7 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 	// 1b. Source row selected footer
 	m.selected = 0
 	outHeaderFooter := m.View()
-	if !strings.Contains(outHeaderFooter, "enter toggle · c source actions") {
+	if !strings.Contains(outHeaderFooter, "enter details · c source actions") {
 		t.Fatalf("expected source group footer in View, got:\n%s", outHeaderFooter)
 	}
 	m.selected = 1
@@ -1463,16 +1464,14 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 		}
 	}
 
-	// Test enter on header row toggles expand/collapse
+	// Test enter on header row opens source detail modal without toggling collapse.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(appModel)
-	if m.isCollapsed("owner/one") {
-		t.Fatal("expected enter on collapsed header to expand it")
+	if !m.detailModal {
+		t.Fatal("expected enter on header to open source detail modal")
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(appModel)
 	if !m.isCollapsed("owner/one") {
-		t.Fatal("expected enter on expanded header to collapse it")
+		t.Fatal("expected enter on header not to change collapsed state")
 	}
 }
 
@@ -1913,5 +1912,369 @@ func TestRemoteDiscoveryRawFallbackRefBypass(t *testing.T) {
 
 	if calledClone {
 		t.Fatal("gitClone was called but it should not have been")
+	}
+}
+
+func TestInteractiveSourceDetailModal(t *testing.T) {
+	t.Setenv("EDITOR", "nano")
+
+	// Mock git clone
+	oldGitClone := gitClone
+	defer func() { gitClone = oldGitClone }()
+	gitClone = func(url, ref, tempDir string) error {
+		return nil
+	}
+
+	// 1. Set up model with a header/source row and one installed skill
+	m := appModel{
+		width:           120,
+		height:          32,
+		focus:           focusSkills,
+		collapsedGroups: make(map[string]bool),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:          "InstalledSkill",
+					Scope:         model.ScopeProject,
+					CanonicalPath: "/path/to/InstalledSkill",
+					Description:   "This is installed.",
+					LocalLock:     &model.LocalLockEntry{Source: "owner/repo", Ref: "main"},
+				},
+			},
+		},
+	}
+	m.discovery = make(map[string]SourceDiscovery)
+
+	// In visibleRows, index 0 is the header "owner/repo", and index 1 is "InstalledSkill"
+	rows := m.visibleRows()
+	if len(rows) < 2 || !rows[0].isHeader {
+		t.Fatalf("expected first row to be header, got visibleRows: %+v", rows)
+	}
+
+	// Select the header row
+	m.selected = 0
+
+	// 2. Open source modal (triggers discovery command when not checked)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(appModel)
+	if !m.detailModal {
+		t.Fatal("expected enter on header to open detail modal")
+	}
+	if m.modalSource != "owner/repo" {
+		t.Fatalf("expected modalSource to be owner/repo, got %q", m.modalSource)
+	}
+	if cmd == nil {
+		t.Fatal("expected opening unchecked source modal to trigger discovery command")
+	}
+
+	// 3. Opening source modal does not repeatedly trigger discovery when already loading/ready/failed
+	m.discovery["owner/repo"] = SourceDiscovery{Status: DiscoveryLoading}
+	_, cmdLoading := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmdLoading != nil {
+		t.Fatal("expected opening loading source modal not to trigger discovery command again")
+	}
+
+	// Let's set it to ready with some available skills
+	m.discovery["owner/repo"] = SourceDiscovery{
+		Status: DiscoveryReady,
+		Skills: []DiscoveredSkill{
+			{Name: "InstalledSkill", Description: "This is installed.", Source: "owner/repo"},
+			{Name: "AvailableSkill", Description: "This is available.", Source: "owner/repo"},
+		},
+	}
+
+	// 4. Test j/k inside source modal changes modal child selection
+	childRows := m.modalChildRows("owner/repo")
+	if len(childRows) != 2 {
+		t.Fatalf("expected 2 child rows (1 installed, 1 available), got %d", len(childRows))
+	}
+	if childRows[0].isAvailable || childRows[0].skill.Name != "InstalledSkill" {
+		t.Fatalf("expected first child row to be InstalledSkill, got: %+v", childRows[0])
+	}
+	if !childRows[1].isAvailable || childRows[1].discoveredSkill.Name != "AvailableSkill" {
+		t.Fatalf("expected second child row to be AvailableSkill, got: %+v", childRows[1])
+	}
+
+	if m.modalSelected != 0 {
+		t.Fatalf("expected initial modalSelected to be 0, got %d", m.modalSelected)
+	}
+
+	// Press 'j' to go to next child row
+	updatedJ, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updatedJ.(appModel)
+	if m.modalSelected != 1 {
+		t.Fatalf("expected modalSelected to be 1 after pressing j, got %d", m.modalSelected)
+	}
+
+	// Press 'k' to go back to first child row
+	updatedK, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updatedK.(appModel)
+	if m.modalSelected != 0 {
+		t.Fatalf("expected modalSelected to be 0 after pressing k, got %d", m.modalSelected)
+	}
+
+	// 5. Test 'c' on installed child exposes installed skill actions
+	m.modalSelected = 0 // installed child
+	updatedC, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	mC := updatedC.(appModel)
+	if mC.detailModal {
+		t.Fatal("expected 'c' to close detailModal")
+	}
+	if !mC.commands {
+		t.Fatal("expected 'c' to open commands picker")
+	}
+	acts := mC.currentActions()
+	hasOpen := false
+	hasRemove := false
+	for _, act := range acts {
+		if act.ID == "open_skill" {
+			hasOpen = true
+		}
+		if act.ID == "remove" {
+			hasRemove = true
+		}
+	}
+	if !hasOpen || !hasRemove {
+		t.Fatalf("expected installed child actions to include open and remove, got: %+v", acts)
+	}
+
+	// 6. Test 'c' on available child exposes install action
+	m.modalSelected = 1  // available child
+	m.detailModal = true // reopen modal for test
+	m.commands = false
+	updatedCAvail, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	mCAvail := updatedCAvail.(appModel)
+	if mCAvail.detailModal {
+		t.Fatal("expected 'c' to close detailModal")
+	}
+	if !mCAvail.commands {
+		t.Fatal("expected 'c' to open commands picker")
+	}
+	actsAvail := mCAvail.currentActions()
+	hasInstall := false
+	for _, act := range actsAvail {
+		if act.ID == "install_skill" {
+			hasInstall = true
+		}
+	}
+	if !hasInstall {
+		t.Fatalf("expected available child actions to include install_skill, got: %+v", actsAvail)
+	}
+
+	// 7. Verify Source modal shows installed and available sections after discovery
+	m.detailModal = true
+	m.modalSelected = 0
+	viewOut := m.View()
+	if !strings.Contains(viewOut, "Installed Skills:") {
+		t.Fatal("expected view to contain Installed Skills: section header")
+	}
+	if !strings.Contains(viewOut, "InstalledSkill [P]") {
+		t.Fatal("expected view to contain InstalledSkill [P]")
+	}
+	if !strings.Contains(viewOut, "Available Skills:") {
+		t.Fatal("expected view to contain Available Skills: section header")
+	}
+	if !strings.Contains(viewOut, "AvailableSkill [available]") {
+		t.Fatal("expected view to contain AvailableSkill [available]")
+	}
+}
+
+func TestSourceDetailModalSelectionScrollsIntoView(t *testing.T) {
+	discovered := make([]DiscoveredSkill, 0, 30)
+	for i := 0; i < 30; i++ {
+		discovered = append(discovered, DiscoveredSkill{
+			Name:        fmt.Sprintf("Available%02d", i),
+			Description: "available skill",
+			Source:      "owner/repo",
+		})
+	}
+	m := appModel{
+		width:           120,
+		height:          24,
+		focus:           focusSkills,
+		selected:        0,
+		detailModal:     true,
+		modalSource:     "owner/repo",
+		modalSelected:   0,
+		viewport:        viewport.New(80, 8),
+		collapsedGroups: make(map[string]bool),
+		discovery: map[string]SourceDiscovery{
+			"owner/repo": {Status: DiscoveryReady, Skills: discovered},
+		},
+		result: model.ScanResult{Skills: []*model.Skill{{
+			Name:      "InstalledSkill",
+			Scope:     model.ScopeProject,
+			LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+		}}},
+	}
+
+	for i := 0; i < 12; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(appModel)
+	}
+	if m.modalSelected != 12 {
+		t.Fatalf("expected modalSelected to follow j navigation, got %d", m.modalSelected)
+	}
+	if m.viewport.YOffset == 0 {
+		t.Fatal("expected source modal viewport to scroll down as selection moves")
+	}
+}
+
+func TestRawSourceValidationBeforeRemoteDiscovery(t *testing.T) {
+	oldGitClone := gitClone
+	defer func() { gitClone = oldGitClone }()
+
+	calledClone := false
+	gitClone = func(url, ref, tempDir string) error {
+		calledClone = true
+		return nil
+	}
+
+	// Case 1: LocalLock.Source contains controls/escapes
+	m1 := appModel{
+		width: 120, height: 32, selected: 0,
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "BadLocal",
+					Scope:     model.ScopeProject,
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo\x1b[31m", Ref: "main"},
+				},
+			},
+		},
+	}
+	m1.discovery = make(map[string]SourceDiscovery)
+	// Open detail modal on header row
+	updated1, cmd1 := m1.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m1 = updated1.(appModel)
+	if !m1.detailModal {
+		t.Fatal("expected detailModal to be open")
+	}
+	if cmd1 != nil {
+		t.Fatal("expected no discovery command to be generated due to raw local source validation failure")
+	}
+	disc1 := m1.discovery["owner/repo"]
+	if disc1.Status != DiscoveryFailed {
+		t.Fatalf("expected discovery to fail, got status: %s", disc1.Status)
+	}
+	if !strings.Contains(disc1.Error, "raw source contains control, newline, or escape characters") {
+		t.Fatalf("expected validation error message, got: %s", disc1.Error)
+	}
+
+	// Case 2: GlobalLock.SourceURL contains newline
+	m2 := appModel{
+		width: 120, height: 32, selected: 0,
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:       "BadGlobal",
+					Scope:      model.ScopeGlobal,
+					GlobalLock: &model.GlobalLockEntry{SourceURL: "owner/repo\nnext", Ref: "main"},
+				},
+			},
+		},
+	}
+	m2.discovery = make(map[string]SourceDiscovery)
+	updated2, cmd2 := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 = updated2.(appModel)
+	if !m2.detailModal {
+		t.Fatal("expected detailModal to be open")
+	}
+	if cmd2 != nil {
+		t.Fatal("expected no discovery command to be generated due to raw global source validation failure")
+	}
+	disc2 := m2.discovery["owner/repo next"]
+	if disc2.Status != DiscoveryFailed {
+		t.Fatalf("expected discovery to fail, got status: %s", disc2.Status)
+	}
+	if !strings.Contains(disc2.Error, "raw source contains control, newline, or escape characters") {
+		t.Fatalf("expected validation error message, got: %s", disc2.Error)
+	}
+
+	// Case 3: LocalLock.Source contains trailing space (sanitization changes it)
+	m3 := appModel{
+		width: 120, height: 32, selected: 0,
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "BadLocalSpace",
+					Scope:     model.ScopeProject,
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo ", Ref: "main"},
+				},
+			},
+		},
+	}
+	m3.discovery = make(map[string]SourceDiscovery)
+	updated3, cmd3 := m3.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 = updated3.(appModel)
+	if !m3.detailModal {
+		t.Fatal("expected detailModal to be open")
+	}
+	if cmd3 != nil {
+		t.Fatal("expected no discovery command to be generated due to raw local source sanitization check failure")
+	}
+	disc3 := m3.discovery["owner/repo"]
+	if disc3.Status != DiscoveryFailed {
+		t.Fatalf("expected discovery to fail, got status: %s", disc3.Status)
+	}
+	if !strings.Contains(disc3.Error, "raw source contains unsafe characters or is modified by sanitization") {
+		t.Fatalf("expected validation error message, got: %s", disc3.Error)
+	}
+
+	if calledClone {
+		t.Fatal("gitClone was unexpectedly called")
+	}
+}
+
+func TestModalCommandPickerUXWithBulkSelection(t *testing.T) {
+	t.Setenv("EDITOR", "nano")
+
+	// Set up model with a header/source row, one installed skill, bulk selectedKeys, source modal open, modal selected installed child, commands open.
+	m := appModel{
+		width:           120,
+		height:          32,
+		focus:           focusSkills,
+		collapsedGroups: make(map[string]bool),
+		selectedKeys:    map[string]bool{"InstalledSkill": true},
+		detailModal:     false,
+		commands:        true,
+		modalSource:     "owner/repo",
+		modalSelected:   0,
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:          "InstalledSkill",
+					Scope:         model.ScopeProject,
+					CanonicalPath: "/path/to/InstalledSkill",
+					Description:   "This is installed.",
+					LocalLock:     &model.LocalLockEntry{Source: "owner/repo", Ref: "main"},
+				},
+			},
+		},
+	}
+
+	// Pressing 'u' should set reinstall_update (single-skill modal child action) instead of bulk
+	updatedU, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	mU := updatedU.(appModel)
+	if mU.confirming {
+		actions := mU.currentActions()
+		if len(actions) == 0 || mU.action >= len(actions) || actions[mU.action].ID != "reinstall_update" {
+			t.Fatalf("expected reinstall_update action to be selected, got actions: %+v, selected action: %d", actions, mU.action)
+		}
+	} else {
+		t.Fatal("expected update action to trigger confirmation overlay")
+	}
+
+	// Pressing 'x' should set remove instead of bulk
+	m.confirming = false
+	updatedX, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	mX := updatedX.(appModel)
+	if mX.confirming {
+		actions := mX.currentActions()
+		if len(actions) == 0 || mX.action >= len(actions) || actions[mX.action].ID != "remove" {
+			t.Fatalf("expected remove action to be selected, got actions: %+v, selected action: %d", actions, mX.action)
+		}
+	} else {
+		t.Fatal("expected remove action to trigger confirmation overlay")
 	}
 }

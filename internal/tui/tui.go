@@ -93,6 +93,8 @@ type appModel struct {
 	focus            focusState
 	collapsedGroups  map[string]bool
 	discovery        map[string]SourceDiscovery
+	modalSelected    int
+	modalSource      string
 }
 
 type paneLayout struct {
@@ -239,6 +241,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runningTitle = ""
 		m.confirming = false
 		m.confirmInput = ""
+		m.modalSource = ""
 		m.actionResult = &msg.result
 		succeeded := msg.result.ExitCode == 0 && msg.result.Err == ""
 		if msg.mutates && succeeded {
@@ -260,23 +263,75 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch key {
 			case "esc", "q":
 				m.detailModal = false
+				m.modalSource = ""
 				m.syncViewport()
 			case "ctrl+c":
 				return m, tea.Quit
 			case "o":
-				m.detailModal = false
-				return m.startCurrentSkillActionByID("open_skill")
+				if m.modalSource != "" {
+					child, ok := m.currentModalSelectedChild()
+					if ok && !child.isAvailable {
+						m.detailModal = false
+						m.modalSource = ""
+						return m.startSkillActionByID(child.skill, "open_skill")
+					}
+				} else {
+					m.detailModal = false
+					return m.startCurrentSkillActionByID("open_skill")
+				}
+			case "u":
+				if m.modalSource != "" {
+					child, ok := m.currentModalSelectedChild()
+					if ok && !child.isAvailable {
+						m.detailModal = false
+						m.modalSource = ""
+						return m.startSkillActionByID(child.skill, "reinstall_update")
+					}
+				}
+			case "x":
+				if m.modalSource != "" {
+					child, ok := m.currentModalSelectedChild()
+					if ok && !child.isAvailable {
+						m.detailModal = false
+						m.modalSource = ""
+						return m.startSkillActionByID(child.skill, "remove")
+					}
+				}
 			case "c":
 				m.detailModal = false
 				m.commands = true
 				m.action = 0
 				m.syncViewport()
 			case "down", "j":
-				m.viewport.LineDown(1)
-				m.clampViewportOffset()
+				if m.modalSource != "" {
+					childRows := m.modalChildRows(m.modalSource)
+					if len(childRows) > 0 {
+						m.modalSelected++
+						if m.modalSelected >= len(childRows) {
+							m.modalSelected = len(childRows) - 1
+						}
+					}
+					m.ensureSourceModalSelectionVisible()
+					m.syncViewport()
+				} else {
+					m.viewport.LineDown(1)
+					m.clampViewportOffset()
+				}
 			case "up", "k":
-				m.viewport.LineUp(1)
-				m.clampViewportOffset()
+				if m.modalSource != "" {
+					childRows := m.modalChildRows(m.modalSource)
+					if len(childRows) > 0 {
+						m.modalSelected--
+						if m.modalSelected < 0 {
+							m.modalSelected = 0
+						}
+					}
+					m.ensureSourceModalSelectionVisible()
+					m.syncViewport()
+				} else {
+					m.viewport.LineUp(1)
+					m.clampViewportOffset()
+				}
 			case "pgdown", "ctrl+d":
 				var cmd tea.Cmd
 				m.viewport, cmd = m.viewport.Update(msg)
@@ -286,7 +341,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport, cmd = m.viewport.Update(msg)
 				return m, cmd
 			case "home":
-				m.viewport.GotoTop()
+				if m.modalSource != "" {
+					m.modalSelected = 0
+					m.viewport.GotoTop()
+					m.syncViewport()
+				} else {
+					m.viewport.GotoTop()
+				}
 			}
 			return m, nil
 		}
@@ -367,6 +428,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch key {
 			case "esc", "c":
 				m.commands = false
+				m.modalSource = ""
 			case "q", "ctrl+c":
 				return m, tea.Quit
 			case "up", "k":
@@ -378,11 +440,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				return m.startAction()
 			case "o":
-				return m.startCurrentSkillActionByID("open_skill")
+				return m.startActionByID("open_skill")
 			case "u":
-				return m.startActionByID(preferredUpdateActionID(m.selectedCount()))
+				actionID := preferredUpdateActionID(m.selectedCount())
+				if m.modalSource != "" {
+					actionID = "reinstall_update"
+				}
+				return m.startActionByID(actionID)
 			case "x":
-				return m.startActionByID(preferredRemoveActionID(m.selectedCount()))
+				actionID := preferredRemoveActionID(m.selectedCount())
+				if m.modalSource != "" {
+					actionID = "remove"
+				}
+				return m.startActionByID(actionID)
 			}
 			m.syncViewport()
 			return m, nil
@@ -423,10 +493,23 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(rows) > 0 && m.selected < len(rows) {
 				row := rows[m.selected]
 				if row.isHeader {
-					if m.isCollapsed(row.groupName) {
-						m.expandGroup(row.groupName)
-					} else {
-						m.collapseGroup(row.groupName)
+					m.detailModal = true
+					m.modalSource = row.groupName
+					m.modalSelected = 0
+					m.detailsFocused = true
+					m.viewport.GotoTop()
+					m.syncViewport()
+
+					groupName := row.groupName
+					disc, exists := m.discovery[groupName]
+					if !exists || (disc.Status != DiscoveryLoading && disc.Status != DiscoveryReady && disc.Status != DiscoveryFailed) {
+						var cmd tea.Cmd
+						var modelTmp tea.Model
+						modelTmp, cmd = m.startDiscovery(groupName)
+						m = modelTmp.(appModel)
+						m.viewport.GotoTop()
+						m.syncViewport()
+						return m, cmd
 					}
 				} else if row.isAvailable {
 					m.focus = focusPreview
@@ -434,6 +517,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.syncViewport()
 				} else {
 					m.detailModal = true
+					m.modalSource = ""
+					m.modalSelected = 0
 					m.detailsFocused = true
 					m.viewport.GotoTop()
 					m.syncViewport()
@@ -637,6 +722,15 @@ func (m *appModel) clampAction() {
 }
 
 func (m appModel) currentActions() []actions.CommandPreview {
+	if m.modalSource != "" {
+		child, ok := m.currentModalSelectedChild()
+		if ok {
+			if child.isAvailable {
+				return actions.ForAvailableSkill(m.modalSource, child.discoveredSkill.Name)
+			}
+			return actions.ForSkill(child.skill)
+		}
+	}
 	selected := m.selectedSkills()
 	if len(selected) > 0 {
 		return actions.ForSkills(selected)
@@ -689,16 +783,8 @@ func (m appModel) startActionByID(id string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) startCurrentSkillActionByID(id string) (tea.Model, tea.Cmd) {
-	rows := m.visibleRows()
-	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
-		return m, nil
-	}
-	row := rows[m.selected]
-	if row.isHeader {
-		return m, nil
-	}
-	for _, action := range actions.ForSkill(row.skill) {
+func (m appModel) startSkillActionByID(sk *model.Skill, id string) (tea.Model, tea.Cmd) {
+	for _, action := range actions.ForSkill(sk) {
 		if action.ID == id {
 			if !action.Available {
 				return m, nil
@@ -708,6 +794,59 @@ func (m appModel) startCurrentSkillActionByID(id string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m appModel) startCurrentSkillActionByID(id string) (tea.Model, tea.Cmd) {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return m, nil
+	}
+	row := rows[m.selected]
+	if row.isHeader {
+		return m, nil
+	}
+	return m.startSkillActionByID(row.skill, id)
+}
+
+type modalChildRow struct {
+	isAvailable     bool
+	skill           *model.Skill
+	discoveredSkill *DiscoveredSkill
+}
+
+func (m appModel) modalChildRows(groupName string) []modalChildRow {
+	var rows []modalChildRow
+	// 1. Installed skills
+	for _, sk := range m.sourceGroupSkills(groupName) {
+		rows = append(rows, modalChildRow{
+			isAvailable: false,
+			skill:       sk,
+		})
+	}
+	// 2. Available skills
+	disc, ok := m.discovery[groupName]
+	if ok && disc.Status == DiscoveryReady {
+		for i, ds := range disc.Skills {
+			if !m.isSkillInstalled(ds.Name, groupName) {
+				rows = append(rows, modalChildRow{
+					isAvailable:     true,
+					discoveredSkill: &disc.Skills[i],
+				})
+			}
+		}
+	}
+	return rows
+}
+
+func (m appModel) currentModalSelectedChild() (modalChildRow, bool) {
+	if m.modalSource == "" {
+		return modalChildRow{}, false
+	}
+	childRows := m.modalChildRows(m.modalSource)
+	if len(childRows) == 0 || m.modalSelected < 0 || m.modalSelected >= len(childRows) {
+		return modalChildRow{}, false
+	}
+	return childRows[m.modalSelected], true
 }
 
 func preferredUpdateActionID(selectedCount int) string {
@@ -1979,6 +2118,9 @@ func (m appModel) previewLines(width int) []string {
 }
 
 func (m appModel) detailLines(width int) []string {
+	if m.modalSource != "" {
+		return m.sourceModalDetailLines(width)
+	}
 	rows := m.visibleRows()
 	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
 		return m.metadataLines(width)
@@ -2000,6 +2142,209 @@ func (m appModel) detailLines(width int) []string {
 		lines = append(lines, sectionHeaderStyle.Render("Preview"), "")
 		lines = append(lines, m.previewLines(width)...)
 	}
+	return lines
+}
+
+func (m appModel) sourceModalDetailLines(width int) []string {
+	groupName := m.modalSource
+	visible, total := m.getGroupCounts(groupName)
+	stateStr := "expanded"
+	if m.isCollapsed(groupName) {
+		stateStr = "collapsed"
+	}
+
+	skills := m.sourceGroupSkills(groupName)
+	var folders, refs, hashes []string
+	var projectCount, globalCount int
+	var skillIssues []display.HealthIssueView
+
+	for _, sk := range skills {
+		info := sourceInfo(sk)
+		if info.Folder != "" {
+			folders = append(folders, info.Folder)
+		}
+		if info.Ref != "" {
+			refs = append(refs, info.Ref)
+		}
+		var h string
+		if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
+			h = sk.LocalLock.ComputedHash
+		} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
+			h = sk.GlobalLock.SkillFolderHash
+		}
+		if h != "" {
+			hashes = append(hashes, h)
+		}
+		if sk.Scope == model.ScopeProject {
+			projectCount++
+		} else if sk.Scope == model.ScopeGlobal {
+			globalCount++
+		}
+
+		view := display.Skill(sk)
+		skillIssues = append(skillIssues, view.HealthIssues...)
+	}
+
+	scopeStr := "mixed"
+	if projectCount > 0 && globalCount == 0 {
+		scopeStr = "project"
+	} else if globalCount > 0 && projectCount == 0 {
+		scopeStr = "global"
+	} else if projectCount == 0 && globalCount == 0 {
+		scopeStr = "unknown"
+	}
+
+	lines := []string{
+		formatMetaLine("Source:", groupName, width),
+		formatMetaLine("State:", stateStr, width),
+		formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
+		formatMetaLine("Scope:", scopeStr, width),
+	}
+
+	if len(folders) > 0 {
+		lines = append(lines, formatMetaLine("Folder:", folders[0], width))
+	}
+	if len(refs) > 0 {
+		lines = append(lines, formatMetaLine("Ref:", refs[0], width))
+	}
+	if len(hashes) > 0 {
+		lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
+	}
+
+	healthStr := "healthy"
+	if len(skillIssues) > 0 {
+		healthStr = "issues detected"
+	}
+	lines = append(lines, formatMetaLine("Health:", healthStr, width))
+
+	if len(skillIssues) > 0 {
+		lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+		for _, issue := range skillIssues {
+			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+			if issue.Path != "" {
+				line += " (" + issue.Path + ")"
+			}
+			style := warningStyle
+			if issue.Severity == "error" {
+				style = errorStyle
+			}
+			lines = append(lines, style.Render(wrapText(line, width)))
+		}
+	}
+
+	lines = append(lines, "")
+
+	childRows := m.modalChildRows(groupName)
+
+	lines = append(lines, sectionHeaderStyle.Render("Installed Skills:"))
+	installedCount := 0
+	for idx, cr := range childRows {
+		if !cr.isAvailable {
+			installedCount++
+			scopeBadgeStr := "P"
+			if cr.skill.Scope == model.ScopeGlobal {
+				scopeBadgeStr = "G"
+			}
+			label := fmt.Sprintf("%s [%s]", cr.skill.Name, scopeBadgeStr)
+			if idx == m.modalSelected {
+				lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s", label))
+			}
+		}
+	}
+	if installedCount == 0 {
+		lines = append(lines, "  No installed skills under this source.")
+	}
+
+	lines = append(lines, "")
+
+	lines = append(lines, sectionHeaderStyle.Render("Available Skills:"))
+	disc, ok := m.discovery[groupName]
+	if !ok {
+		discoverable, reason := m.isSourceDiscoverable(groupName)
+		if !discoverable {
+			lines = append(lines, errorStyle.Render("  Discovery unavailable: "+reason))
+		} else {
+			lines = append(lines, dimStyle.Render("  Discovery pending..."))
+		}
+	} else {
+		switch disc.Status {
+		case DiscoveryLoading:
+			lines = append(lines, dimStyle.Render("  Scanning/cloning source..."))
+		case DiscoveryFailed:
+			lines = append(lines, errorStyle.Render("  Discovery failed: "+disc.Error))
+		case DiscoveryReady:
+			availableCount := 0
+			for idx, cr := range childRows {
+				if cr.isAvailable {
+					availableCount++
+					label := fmt.Sprintf("%s [available]", cr.discoveredSkill.Name)
+					if idx == m.modalSelected {
+						lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+					} else {
+						lines = append(lines, fmt.Sprintf("  %s", label))
+					}
+				}
+			}
+			if availableCount == 0 {
+				lines = append(lines, "  All discovered skills from this source are installed.")
+			}
+		}
+	}
+
+	if len(childRows) > 0 && m.modalSelected >= 0 && m.modalSelected < len(childRows) {
+		selectedChild := childRows[m.modalSelected]
+		lines = append(lines, "")
+		previewDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Repeat("─", max(1, width)))
+		lines = append(lines, previewDivider)
+
+		if selectedChild.isAvailable {
+			ds := selectedChild.discoveredSkill
+			lines = append(lines,
+				titleStyle.Render(ds.Name+" [available]"),
+				"",
+				formatMetaLine("Status:", "available", width),
+				formatMetaLine("Source:", ds.Source, width),
+			)
+			if ds.SkillPath != "" {
+				lines = append(lines, formatMetaLine("Path:", ds.SkillPath, width))
+			}
+			if ds.Description != "" {
+				lines = append(lines, "", wrapText(ds.Description, width))
+			}
+			if ds.Preview != "" {
+				lines = append(lines, "", sectionHeaderStyle.Render("Preview"), "")
+				previewLines := strings.Split(ds.Preview, "\n")
+				for _, line := range previewLines {
+					lines = append(lines, wrapText(line, width))
+				}
+			}
+		} else {
+			sk := selectedChild.skill
+			view := display.Skill(sk)
+			lines = append(lines,
+				titleStyle.Render(view.Name),
+				"",
+				formatMetaLine("Scope:", string(view.Scope), width),
+				formatMetaLine("Lock:", display.LockSummary(view), width),
+			)
+			if sourceLines := sourceDetailLines(sk, width); len(sourceLines) > 0 {
+				lines = append(lines, sourceLines...)
+			}
+			if view.CanonicalPath != "" {
+				lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
+			}
+			if view.Preview != "" {
+				lines = append(lines, "", sectionHeaderStyle.Render("Preview"), "")
+				previewLines := strings.Split(view.Preview, "\n")
+				for _, line := range previewLines {
+					lines = append(lines, wrapText(line, width))
+				}
+			}
+		}
+	}
+
 	return lines
 }
 
@@ -2251,7 +2596,7 @@ func (m appModel) footerText(width int) string {
 		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
 			row := rows[m.selected]
 			if row.isHeader {
-				text = "enter toggle · c source actions · h/- collapse · l/+ expand · d discover · ? help"
+				text = "enter details · c source actions · h/- collapse · l/+ expand · d discover · ? help"
 			} else if row.isAvailable {
 				text = "enter preview · c install actions · ? help"
 			} else {
@@ -2291,7 +2636,7 @@ func (m appModel) helpModalOverlay(layout appLayout) string {
 		"  /               Initiate text search",
 		"",
 		sectionHeaderStyle.Render("Actions & Selection:"),
-		"  enter           Open detail modal (Skill) or toggle collapse (Source row)",
+		"  enter           Open detail modal for the selected source or skill",
 		"  space           Mark / unmark selected skill for bulk actions",
 		"  s               Mark all skills in the current source group",
 		"  o               Open selected skill directly in editor",
@@ -2335,10 +2680,10 @@ func (m appModel) detailModalOverlay(layout appLayout) string {
 	m.viewport.Height = modalHeight - 6
 	m.viewport.SetContent(m.detailText(modalWidth - 4))
 
-	helpLine := dimStyle.Render("esc/q close · o open in editor · c command picker · ↑/↓ scroll")
+	helpLine := dimStyle.Render(m.detailModalHelpLine())
 
 	content := []string{
-		titleStyle.Render("Skill Detail View"),
+		titleStyle.Render(m.detailModalTitle()),
 		"",
 		m.viewport.View(),
 		"",
@@ -2354,6 +2699,70 @@ func (m appModel) detailModalOverlay(layout appLayout) string {
 		Render(strings.Join(content, "\n"))
 
 	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
+func (m appModel) detailModalTitle() string {
+	if m.modalSource != "" {
+		return "Source Detail View"
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return "Detail View"
+	}
+	row := rows[m.selected]
+	if row.isHeader {
+		return "Source Detail View"
+	}
+	if row.isAvailable {
+		return "Available Skill Detail View"
+	}
+	return "Skill Detail View"
+}
+
+func (m appModel) detailModalHelpLine() string {
+	if m.modalSource != "" {
+		return "esc/q close · ↑/↓ select skill · c actions · o/u/x installed actions"
+	}
+	rows := m.visibleRows()
+	if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) && rows[m.selected].isAvailable {
+		return "esc/q close · c install actions · ↑/↓ scroll"
+	}
+	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
+}
+
+func (m *appModel) ensureSourceModalSelectionVisible() {
+	if m.modalSource == "" {
+		return
+	}
+	// The source modal renders source metadata before the child list. Keep a
+	// little context above the selected child rather than treating modalSelected
+	// as a raw viewport line number.
+	selectedLine := 8 + m.modalSelected
+	if selectedLine < 0 {
+		selectedLine = 0
+	}
+	height := m.viewport.Height
+	if height <= 0 {
+		// View() computes the final modal viewport height. Use the same rough
+		// default here so keyboard movement updates the offset before render.
+		height = 18
+	}
+	if selectedLine < m.viewport.YOffset+3 {
+		offset := selectedLine - 3
+		if offset < 0 {
+			offset = 0
+		}
+		m.viewport.SetYOffset(offset)
+		return
+	}
+	bottom := m.viewport.YOffset + height - 4
+	if selectedLine > bottom {
+		offset := selectedLine - height + 4
+		if offset < 0 {
+			offset = 0
+		}
+		m.viewport.SetYOffset(offset)
+	}
 }
 
 func (m appModel) confirmationOverlay(layout appLayout) string {
@@ -2996,7 +3405,68 @@ func rawSourceRef(skill *model.Skill) string {
 	return ""
 }
 
+func validateRawSource(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("source is empty")
+	}
+	// Check for escapes, control characters, or newlines
+	for _, r := range raw {
+		if r < 32 || r == 127 || (r >= 128 && r <= 159) {
+			return fmt.Errorf("raw source contains control, newline, or escape characters")
+		}
+	}
+	// Also check if sanitization changes it
+	if compat.SanitizeMetadata(raw) != raw {
+		return fmt.Errorf("raw source contains unsafe characters or is modified by sanitization")
+	}
+	return nil
+}
+
+func (m appModel) validateRawSourcesForGroup(groupName string) error {
+	skills := m.sourceGroupSkills(groupName)
+	if len(skills) == 0 {
+		return nil
+	}
+	for _, sk := range skills {
+		var raw string
+		var hasLock bool
+		if sk.Scope == model.ScopeProject && sk.LocalLock != nil {
+			raw = sk.LocalLock.Source
+			hasLock = true
+		} else if sk.Scope == model.ScopeGlobal && sk.GlobalLock != nil {
+			hasLock = true
+			if sk.GlobalLock.Source != "" {
+				raw = sk.GlobalLock.Source
+			} else {
+				raw = sk.GlobalLock.SourceURL
+			}
+		} else {
+			if sk.LocalLock != nil {
+				raw = sk.LocalLock.Source
+				hasLock = true
+			} else if sk.GlobalLock != nil {
+				hasLock = true
+				if sk.GlobalLock.Source != "" {
+					raw = sk.GlobalLock.Source
+				} else {
+					raw = sk.GlobalLock.SourceURL
+				}
+			}
+		}
+		if !hasLock {
+			continue
+		}
+		if err := validateRawSource(raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m appModel) isSourceDiscoverable(group string) (bool, string) {
+	if err := m.validateRawSourcesForGroup(group); err != nil {
+		return false, err.Error()
+	}
 	if root := m.resolveGroupSourceRoot(group); root != "" {
 		return true, ""
 	}
