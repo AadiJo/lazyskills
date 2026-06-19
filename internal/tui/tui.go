@@ -279,8 +279,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.action = 0
 				m.actionResult = nil
 			} else if m.agent != "" {
+				selectedKey := m.currentSelectedKey()
+				previousSelected := m.selected
 				m.agent = ""
-				m.selected = 0
+				m.restoreSelection(selectedKey, previousSelected)
 				m.action = 0
 				m.actionResult = nil
 				m.viewport.GotoTop()
@@ -312,14 +314,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 			return m, loadSnapshot(m.cwd)
 		case "a":
+			selectedKey := m.currentSelectedKey()
+			previousSelected := m.selected
 			m.agent = m.nextAgentFilter()
-			m.selected = 0
+			m.restoreSelection(selectedKey, previousSelected)
 			m.action = 0
 			m.actionResult = nil
 			m.viewport.GotoTop()
 		case "A":
+			selectedKey := m.currentSelectedKey()
+			previousSelected := m.selected
 			m.agent = ""
-			m.selected = 0
+			m.restoreSelection(selectedKey, previousSelected)
 			m.action = 0
 			m.actionResult = nil
 			m.viewport.GotoTop()
@@ -681,6 +687,28 @@ func skillKey(skill *model.Skill) string {
 	return strings.Join([]string{string(skill.Scope), skill.Name, skill.CanonicalPath, skill.SkillPath}, "\x00")
 }
 
+func (m appModel) currentSelectedKey() string {
+	items := m.filteredSkills()
+	if len(items) == 0 || m.selected < 0 || m.selected >= len(items) {
+		return ""
+	}
+	return skillKey(items[m.selected])
+}
+
+func (m *appModel) restoreSelection(selectedKey string, fallback int) {
+	items := m.filteredSkills()
+	if selectedKey != "" {
+		for i, skill := range items {
+			if skillKey(skill) == selectedKey {
+				m.selected = i
+				return
+			}
+		}
+	}
+	m.selected = fallback
+	m.clampSelection()
+}
+
 func sourceGroupKey(skill *model.Skill) string {
 	info := sourceInfo(skill)
 	if info.Source == "" {
@@ -809,8 +837,7 @@ func (m appModel) View() string {
 	left := leftStyle.Render(fitLines(viewModel.filterPane(layout.Left.ContentWidth), layout.Left.ContentHeight))
 	list := listStyle.Render(fitLines(viewModel.listPane(layout.List.ContentHeight, layout.List.ContentWidth), layout.List.ContentHeight))
 	detail := detailStyle.Render(viewModel.detailPane())
-	footer := fitToScreen(viewModel.footer(), layout.Width, 1)
-	view := lipgloss.JoinHorizontal(lipgloss.Top, left, list, detail) + "\n" + footer
+	view := lipgloss.JoinHorizontal(lipgloss.Top, left, list, detail)
 	if viewModel.running {
 		return viewModel.runningOverlay(layout)
 	}
@@ -916,7 +943,7 @@ func (m appModel) listPane(height, width int) string {
 		if issueErrors > 0 {
 			label += fmt.Sprintf(" !%d", issueErrors)
 		} else if issueWarnings > 0 {
-			label += fmt.Sprintf(" ⚠%d", issueWarnings)
+			label += fmt.Sprintf(" ⚠ %d", issueWarnings)
 		}
 		var line string
 		if i == m.selected {
@@ -1024,13 +1051,24 @@ func (m appModel) detailLines(width int) []string {
 	}
 
 	if len(view.HealthIssues) > 0 {
-		lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+		issueErrors, _ := healthIssueCounts(view.HealthIssues)
+		headerStyle := warningStyle.Bold(true)
+		header := "Warnings"
+		if issueErrors > 0 {
+			headerStyle = healthHeaderStyle
+			header = "Health Issues"
+		}
+		lines = append(lines, "", headerStyle.Render(header))
 		for _, issue := range view.HealthIssues {
 			line := fmt.Sprintf("- %s: %s", issue.Type, issue.Message)
 			if issue.Path != "" {
 				line += " (" + issue.Path + ")"
 			}
-			lines = append(lines, wrapText(line, width))
+			style := warningStyle
+			if issue.Severity == "error" {
+				style = errorStyle
+			}
+			lines = append(lines, style.Render(wrapText(line, width)))
 		}
 	}
 
@@ -1086,14 +1124,43 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 		}
 		return []string{formatMetaLine("Visibility:", "no compatibility data for "+m.agentLabel(), width)}
 	}
+	detected := m.detectedAgentSet()
 	visible := 0
+	total := 0
+	label := "agents"
+	if len(detected) > 0 {
+		label = "detected agents"
+	}
 	for _, visibility := range view.Visibility {
+		if len(detected) > 0 && !detected[visibility.Agent] {
+			continue
+		}
+		total++
 		if visibility.Visible {
 			visible++
 		}
 	}
-	val := fmt.Sprintf("Available to %d/%d agents", visible, len(view.Visibility))
+	if total == 0 {
+		label = "agents"
+		total = len(view.Visibility)
+		for _, visibility := range view.Visibility {
+			if visibility.Visible {
+				visible++
+			}
+		}
+	}
+	val := fmt.Sprintf("Available to %d/%d %s", visible, total, label)
 	return []string{formatMetaLine("Visibility:", val, width)}
+}
+
+func (m appModel) detectedAgentSet() map[string]bool {
+	out := map[string]bool{}
+	for _, agent := range m.result.Agents {
+		if agent.Detected {
+			out[agent.Name] = true
+		}
+	}
+	return out
 }
 
 func (m appModel) commandsOverlay(layout appLayout) string {
@@ -1265,20 +1332,6 @@ func (m appModel) runningOverlay(layout appLayout) string {
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(actionBorderColor).Padding(1, 2).Width(52).Render(strings.Join(lines, "\n"))
 	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
-}
-
-func (m appModel) footer() string {
-	mode := ""
-	selection := ""
-	if count := m.selectedCount(); count > 0 {
-		selection = fmt.Sprintf(" %s", lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(fmt.Sprintf("%d selected", count))) + " : space toggle, esc clear"
-	}
-	if m.searching {
-		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("SEARCH MODE") + " : type to filter, esc/enter to leave"
-	} else if m.commands {
-		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render("ACTION MODE") + " : j/k choose, enter run, c/esc close"
-	}
-	return dimStyle.Render("LazySkills "+appVersion) + selection + mode
 }
 
 func (m appModel) filteredSkills() []*model.Skill {
@@ -1542,7 +1595,7 @@ func newAppLayout(width, height int) appLayout {
 	}
 
 	leftOuter, listOuter, detailOuter := paneOuterWidths(width)
-	paneHeight := height - 1 // reserve one row for the footer
+	paneHeight := height
 	layout.Left = newPaneLayout(leftOuter, paneHeight)
 	layout.List = newPaneLayout(listOuter, paneHeight)
 	layout.Detail = newPaneLayout(detailOuter, paneHeight)

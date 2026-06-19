@@ -40,10 +40,10 @@ func TestErrorViewIsSanitized(t *testing.T) {
 	}
 }
 
-func TestViewRendersQuietVersionFooter(t *testing.T) {
+func TestViewRendersWithoutFooter(t *testing.T) {
 	m := appModel{width: 100, height: 30, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Description: "Build desc", Scope: model.ScopeProject}}}}
 	out := m.View()
-	if !strings.Contains(out, "LazySkills v1") || strings.Contains(out, "actions are guarded") || !strings.Contains(out, "Build") {
+	if strings.Contains(out, "LazySkills v1") || strings.Contains(out, "actions are guarded") || !strings.Contains(out, "Build") {
 		t.Fatalf("unexpected view: %s", out)
 	}
 }
@@ -147,6 +147,40 @@ func TestAgentFilterCanResetDirectlyToAll(t *testing.T) {
 	}
 }
 
+func TestAgentFilterPreservesSelectedSkill(t *testing.T) {
+	m := appModel{width: 100, height: 30, selected: 2, result: model.ScanResult{
+		Agents: []model.AgentState{{Name: "claude-code", Detected: true}, {Name: "opencode", Detected: true}},
+		Skills: []*model.Skill{
+			{Name: "OpenOnly", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}}},
+			{Name: "Shared", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}, {Agent: "claude-code"}}},
+			{Name: "ClaudeOnly", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "claude-code"}}},
+		},
+	}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next := updated.(appModel)
+	items := next.filteredSkills()
+	if next.agent != "claude-code" || len(items) <= next.selected || items[next.selected].Name != "ClaudeOnly" {
+		t.Fatalf("expected agent switch to preserve ClaudeOnly, agent=%q selected=%d items=%#v", next.agent, next.selected, items)
+	}
+}
+
+func TestClearingAgentFilterPreservesSelectedSkill(t *testing.T) {
+	m := appModel{width: 100, height: 30, agent: "claude-code", selected: 1, result: model.ScanResult{
+		Agents: []model.AgentState{{Name: "claude-code", Detected: true}},
+		Skills: []*model.Skill{
+			{Name: "OpenOnly", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}}},
+			{Name: "Shared", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}, {Agent: "claude-code"}}},
+			{Name: "ClaudeOnly", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "claude-code"}}},
+		},
+	}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	next := updated.(appModel)
+	items := next.filteredSkills()
+	if next.agent != "" || len(items) <= next.selected || items[next.selected].Name != "ClaudeOnly" {
+		t.Fatalf("expected clearing agent to preserve ClaudeOnly, agent=%q selected=%d items=%#v", next.agent, next.selected, items)
+	}
+}
+
 func TestTopLevelScanHealthIsRenderedSanitized(t *testing.T) {
 	m := appModel{width: 100, height: 30, result: model.ScanResult{HealthIssues: []model.HealthIssue{{Type: "corrupt_lock", Message: "bad\x1b[31m lock"}}}}
 	out := m.View()
@@ -215,7 +249,7 @@ func TestListRendersIssueRowsWithSeverityBadges(t *testing.T) {
 		{Name: "Error", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Severity: "error", Message: "missing SKILL.md"}}},
 	}}}
 	out := m.listPane(20, 80)
-	if !strings.Contains(out, "Warning [P] ⚠1") {
+	if !strings.Contains(out, "Warning [P] ⚠ 1") {
 		t.Fatalf("expected warning issue badge, got %q", out)
 	}
 	if !strings.Contains(out, "Error [P] !1") {
@@ -223,6 +257,16 @@ func TestListRendersIssueRowsWithSeverityBadges(t *testing.T) {
 	}
 	if strings.Contains(out, "BROKEN") {
 		t.Fatalf("issue badge should stay subtle, got %q", out)
+	}
+}
+
+func TestDetailRendersWarningOnlyIssuesAsWarnings(t *testing.T) {
+	m := appModel{result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "Custom", Scope: model.ScopeGlobal, HealthIssues: []model.HealthIssue{{Type: "ghost_agent_skill", Severity: "warning", Message: "agent-specific skill"}}},
+	}}}
+	out := m.detailText(80)
+	if !strings.Contains(out, "Warnings") || strings.Contains(out, "Health Issues") {
+		t.Fatalf("expected warning-only detail section, got %q", out)
 	}
 }
 
@@ -357,7 +401,7 @@ func TestSpaceMarksSkillsAndEscClearsSelection(t *testing.T) {
 	m := bulkActionTestModel(t.TempDir())
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(appModel)
-	if m.selectedCount() != 1 || !strings.Contains(m.View(), "1 selected") || !strings.Contains(m.View(), "● One") {
+	if m.selectedCount() != 1 || !strings.Contains(m.View(), "● One") {
 		t.Fatalf("expected one marked skill, count=%d view=%q", m.selectedCount(), m.View())
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -886,6 +930,15 @@ func TestVisibilityReasonTranslation(t *testing.T) {
 	linesAll := mAll.visibilitySummary(display.Skill(sk), 80)
 	if len(linesAll) != 1 || !strings.Contains(linesAll[0], "Available to 1/3 agents") {
 		t.Errorf("expected all-agents summary, got %v", linesAll)
+	}
+	mDetected := appModel{result: model.ScanResult{Agents: []model.AgentState{
+		{Name: "claude-code", Detected: true},
+		{Name: "opencode", Detected: true},
+		{Name: "cursor", Detected: false},
+	}}}
+	linesDetected := mDetected.visibilitySummary(display.Skill(sk), 80)
+	if len(linesDetected) != 1 || !strings.Contains(linesDetected[0], "Available to 1/2 detected agents") {
+		t.Errorf("expected detected-agent summary, got %v", linesDetected)
 	}
 
 	mFiltered := appModel{agent: "claude-code"}
