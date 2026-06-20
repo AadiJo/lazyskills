@@ -1262,7 +1262,7 @@ func TestSearchEscapeClearsQueryAndBackspaceWorksOutsideSearch(t *testing.T) {
 }
 
 func TestDetailPaneClipsLongPreview(t *testing.T) {
-	preview := strings.Repeat("line\n", 80)
+	preview := strings.Repeat("- line\n", 80)
 	m := appModel{width: 100, height: 20, result: model.ScanResult{Skills: []*model.Skill{{Name: "Long", Description: "desc", Scope: model.ScopeProject, Preview: preview}}}}
 	m.syncViewport()
 	out := m.previewViewport.View()
@@ -1272,8 +1272,20 @@ func TestDetailPaneClipsLongPreview(t *testing.T) {
 	}
 }
 
+func TestMarkdownPreviewStripsFrontmatter(t *testing.T) {
+	preview := "---\nname: better-icons\ndescription: icons\n---\n# Better Icons\n\nSearch icons."
+	lines := renderMarkdownPreview(preview, 80)
+	out := strings.Join(lines, "\n")
+	if strings.Contains(out, "name: better-icons") || strings.Contains(out, "description: icons") || strings.Contains(out, "--------") {
+		t.Fatalf("expected frontmatter to be hidden from markdown preview, got %q", out)
+	}
+	if !strings.Contains(out, "Better") || !strings.Contains(out, "Icons") || !strings.Contains(out, "Search") || !strings.Contains(out, "icons") {
+		t.Fatalf("expected rendered markdown body, got %q", out)
+	}
+}
+
 func TestDetailScrollKeysMoveViewport(t *testing.T) {
-	preview := strings.Repeat("line\n", 80)
+	preview := strings.Repeat("- line\n", 80)
 	m := appModel{width: 100, height: 20, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{Name: "Long", Description: "desc", Scope: model.ScopeProject, Preview: preview}}}}
 	m.syncViewport()
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
@@ -1547,7 +1559,7 @@ func TestDetailsOnboardingEmptyState(t *testing.T) {
 	}
 	linesMissing := mMissingDeps.detailLines(80)
 	joinedMissing := strings.Join(linesMissing, "\n")
-	if !strings.Contains(joinedMissing, "Dependency Issue") || !strings.Contains(joinedMissing, "skills: missing") {
+	if !strings.Contains(joinedMissing, "Dependency Issue") || !strings.Contains(joinedMissing, "skills:") || !strings.Contains(joinedMissing, "missing") {
 		t.Fatalf("expected dependency error details, got %q", joinedMissing)
 	}
 }
@@ -1741,7 +1753,7 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 	m.selected = 0 // select header row owner/one
 	m.collapsedGroups["owner/one"] = true
 	outHeader := m.View()
-	if !strings.Contains(outHeader, "State:       collapsed") {
+	if !strings.Contains(outHeader, "State:") || !strings.Contains(outHeader, "collapsed") {
 		t.Fatalf("expected header placeholder/metadata in Metadata pane, got:\n%s", outHeader)
 	}
 
@@ -1788,13 +1800,13 @@ func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
 	if !strings.Contains(metaJoined, "Source:      owner/one") {
 		t.Errorf("expected source name in metadata, got %q", metaJoined)
 	}
-	if !strings.Contains(metaJoined, "State:       expanded") {
+	if !strings.Contains(metaJoined, "State:") || !strings.Contains(metaJoined, "expanded") {
 		t.Errorf("expected state in metadata, got %q", metaJoined)
 	}
 	if !strings.Contains(metaJoined, "Skills:      2 visible / 2 total") {
 		t.Errorf("expected skills count in metadata, got %q", metaJoined)
 	}
-	if !strings.Contains(metaJoined, "Scope:       mixed") {
+	if !strings.Contains(metaJoined, "Scope:") || (!strings.Contains(metaJoined, "mixed") && !strings.Contains(metaJoined, "Mixed")) {
 		t.Errorf("expected scope mixed in metadata, got %q", metaJoined)
 	}
 	if strings.Contains(metaJoined, "Hash:") {

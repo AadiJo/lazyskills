@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
@@ -86,6 +89,20 @@ func scopeStyle(scope string) lipgloss.Style {
 		return scopeGlobalStyle
 	default:
 		return dimStyle
+	}
+}
+
+func styledScopeBadge(scope string) string {
+	s := strings.ToLower(scope)
+	switch s {
+	case "project":
+		return scopeProjectStyle.Render("[Project]")
+	case "global":
+		return scopeGlobalStyle.Render("[Global]")
+	case "mixed":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Render("[Mixed]")
+	default:
+		return dimStyle.Render("[" + strings.Title(s) + "]")
 	}
 }
 
@@ -296,9 +313,9 @@ func (m appModel) metadataLines(width int) []string {
 		var lines []string
 
 		if len(m.result.HealthIssues) > 0 {
-			lines = append(lines, errorStyle.Render("Scan health:"), "")
+			lines = append(lines, errorStyle.Render("✗ Scan health issues"), "")
 			for _, issue := range m.result.HealthIssues {
-				lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
+				lines = append(lines, truncate(fmt.Sprintf("  • %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
 			}
 			lines = append(lines, "")
 		}
@@ -312,12 +329,12 @@ func (m appModel) metadataLines(width int) []string {
 			)
 			for _, tool := range []string{"skills", "npx", "node", "npm"} {
 				status := "missing"
-				style := errorStyle
+				statusStyled := errorStyle.Render(status)
 				if m.result.Preflight.Tools[tool].Exists {
 					status = "available"
-					style = successStyle
+					statusStyled = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render(status)
 				}
-				lines = append(lines, style.Render(fmt.Sprintf("  • %s: %s", tool, status)))
+				lines = append(lines, fmt.Sprintf("  • %-8s %s", tool+":", statusStyled))
 			}
 		} else if len(m.result.Skills) == 0 {
 			lines = append(lines,
@@ -326,9 +343,9 @@ func (m appModel) metadataLines(width int) []string {
 				wrapText("No skills were found in your project or global directory.", width),
 				"",
 				dimStyle.Render("Quick Onboarding:"),
-				wrapText("1. Press 'c' to open actions and choose 'Initialize skills in project' to create a local skills directory.", width),
-				wrapText("2. Choose 'Find new skills (interactive)' to search and install online skills.", width),
-				wrapText("3. Link your existing skills using symlinks.", width),
+				wrapText("  1. Press 'c' to open actions and choose 'Initialize skills in project' to create a local skills directory.", width),
+				wrapText("  2. Choose 'Find new skills (interactive)' to search and install online skills.", width),
+				wrapText("  3. Link your existing skills using symlinks.", width),
 			)
 		} else {
 			lines = append(lines,
@@ -352,9 +369,9 @@ func (m appModel) metadataLines(width int) []string {
 	row := rows[m.selected]
 	if row.isHeader {
 		visible, total := m.getGroupCounts(row.groupName)
-		stateStr := "expanded"
+		stateVal := "▼ expanded"
 		if m.isCollapsed(row.groupName) {
-			stateStr = "collapsed"
+			stateVal = "▶ collapsed"
 		}
 
 		skills := m.sourceGroupSkills(row.groupName)
@@ -390,11 +407,18 @@ func (m appModel) metadataLines(width int) []string {
 			scopeStr = "unknown"
 		}
 
+		scopeVal := styledScopeBadge(scopeStr)
+
+		healthVal := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("✓ healthy")
+		if len(skillIssues) > 0 {
+			healthVal = errorStyle.Render("✗ issues detected")
+		}
+
 		lines := []string{
 			formatMetaLine("Source:", row.groupName, width),
-			formatMetaLine("State:", stateStr, width),
+			formatMetaLine("State:", stateVal, width),
 			formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
-			formatMetaLine("Scope:", scopeStr, width),
+			formatMetaLine("Scope:", scopeVal, width),
 		}
 
 		if len(folders) > 0 {
@@ -404,22 +428,32 @@ func (m appModel) metadataLines(width int) []string {
 			lines = append(lines, formatMetaLine("Ref:", refs[0], width))
 		}
 
-		healthStr := "healthy"
-		if len(skillIssues) > 0 {
-			healthStr = "issues detected"
-		}
-		lines = append(lines, formatMetaLine("Health:", healthStr, width))
+		lines = append(lines, formatMetaLine("Health:", healthVal, width))
 
 		if len(skillIssues) > 0 {
-			lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+			hasErrors := false
 			for _, issue := range skillIssues {
-				line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
-				if issue.Path != "" {
-					line += " (" + issue.Path + ")"
+				if issue.Severity == "error" {
+					hasErrors = true
+					break
 				}
+			}
+			headerText := "▲ Warnings"
+			headerStyle := warningStyle.Bold(true)
+			if hasErrors {
+				headerText = "✗ Health Issues"
+				headerStyle = healthHeaderStyle
+			}
+			lines = append(lines, "", headerStyle.Render(headerText))
+			for _, issue := range skillIssues {
+				bullet := "  • "
 				style := warningStyle
 				if issue.Severity == "error" {
 					style = errorStyle
+				}
+				line := fmt.Sprintf("%s%s: %s", bullet, humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+				if issue.Path != "" {
+					line += " (" + issue.Path + ")"
 				}
 				lines = append(lines, style.Render(wrapText(line, width)))
 			}
@@ -429,14 +463,18 @@ func (m appModel) metadataLines(width int) []string {
 
 	view := display.Skill(row.skill)
 	lines := []string{
-		formatMetaLine("Scope:", string(view.Scope), width),
+		formatMetaLine("Scope:", styledScopeBadge(string(view.Scope)), width),
 	}
 	if sourceLines := sourceDetailLines(row.skill, width); len(sourceLines) > 0 {
 		lines = append(lines, sourceLines...)
 	} else {
 		// No source block to show; fall back to the lock/tracking state
 		// (covers "not tracked" and path-only locks).
-		lines = append(lines, formatMetaLine("Lock:", display.LockSummary(view), width))
+		lockVal := display.LockSummary(view)
+		if lockVal == "not tracked" {
+			lockVal = warningStyle.Render("not tracked")
+		}
+		lines = append(lines, formatMetaLine("Lock:", lockVal, width))
 	}
 	if view.CanonicalPath != "" {
 		lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
@@ -467,7 +505,13 @@ func (m appModel) metadataLines(width int) []string {
 					lines = append(lines, "", sectionHeaderStyle.Render("Observed Paths"))
 					showObservedSection = true
 				}
-				line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
+				statusStyled := p.Status
+				if p.Status == "linked" || p.Status == "active" {
+					statusStyled = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render(p.Status)
+				} else {
+					statusStyled = dimStyle.Render(p.Status)
+				}
+				line := fmt.Sprintf("  • %s (%s): %s", p.Agent, p.Scope, statusStyled)
 				if p.TargetPath != "" {
 					line += " → " + p.TargetPath
 				}
@@ -479,29 +523,30 @@ func (m appModel) metadataLines(width int) []string {
 	if len(view.HealthIssues) > 0 {
 		issueErrors, _ := healthIssueCounts(view.HealthIssues)
 		headerStyle := warningStyle.Bold(true)
-		header := "Warnings"
+		header := "▲ Warnings"
 		if issueErrors > 0 {
 			headerStyle = healthHeaderStyle
-			header = "Health Issues"
+			header = "✗ Health Issues"
 		}
 		lines = append(lines, "", headerStyle.Render(header))
 		for _, issue := range view.HealthIssues {
-			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
-			if issue.Path != "" {
-				line += " (" + issue.Path + ")"
-			}
+			bullet := "  • "
 			style := warningStyle
 			if issue.Severity == "error" {
 				style = errorStyle
+			}
+			line := fmt.Sprintf("%s%s: %s", bullet, humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+			if issue.Path != "" {
+				line += " (" + issue.Path + ")"
 			}
 			lines = append(lines, style.Render(wrapText(line, width)))
 		}
 	}
 
 	if len(m.result.HealthIssues) > 0 {
-		lines = append(lines, "", errorStyle.Render("Scan health"))
+		lines = append(lines, "", errorStyle.Render("✗ Scan Health Issues"))
 		for _, issue := range m.result.HealthIssues {
-			lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
+			lines = append(lines, truncate(fmt.Sprintf("  • %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
 		}
 	}
 
@@ -587,12 +632,62 @@ func (m appModel) previewLines(width int) []string {
 		return []string{dimStyle.Render("No preview available for this skill.")}
 	}
 
+	return renderMarkdownPreview(view.Preview, width)
+}
+
+func renderMarkdownPreview(markdown string, width int) []string {
+	markdown = stripMarkdownFrontmatter(markdown)
+	if strings.TrimSpace(markdown) == "" {
+		return []string{dimStyle.Render("No preview available for this skill.")}
+	}
+	renderWidth := max(20, width-2)
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStyles(compactPreviewMarkdownStyle()),
+		glamour.WithWordWrap(renderWidth),
+	)
+	if err == nil {
+		rendered, renderErr := renderer.Render(markdown)
+		if renderErr == nil && strings.TrimSpace(rendered) != "" {
+			return strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+		}
+	}
 	lines := []string{}
-	previewLines := strings.Split(view.Preview, "\n")
-	for _, line := range previewLines {
+	for _, line := range strings.Split(markdown, "\n") {
 		lines = append(lines, wrapText(line, width))
 	}
 	return lines
+}
+
+func stripMarkdownFrontmatter(markdown string) string {
+	trimmed := strings.TrimLeft(markdown, "\ufeff\r\n\t ")
+	if !strings.HasPrefix(trimmed, "---\n") && !strings.HasPrefix(trimmed, "---\r\n") {
+		return markdown
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return strings.Join(lines[i+1:], "\n")
+		}
+	}
+	return markdown
+}
+
+func compactPreviewMarkdownStyle() ansi.StyleConfig {
+	style := styles.DarkStyleConfig
+	zero := uint(0)
+	headingColor := "39"
+	bold := true
+	style.Document.Margin = &zero
+	style.Document.BlockPrefix = ""
+	style.Document.BlockSuffix = ""
+	style.Heading.BlockSuffix = ""
+	style.H1.Prefix = "# "
+	style.H1.Suffix = ""
+	style.H1.Color = &headingColor
+	style.H1.BackgroundColor = nil
+	style.H1.Bold = &bold
+	style.HorizontalRule.Format = strings.Repeat("─", 8)
+	return style
 }
 
 func (m appModel) detailLines(width int) []string {
@@ -626,9 +721,9 @@ func (m appModel) detailLines(width int) []string {
 func (m appModel) sourceModalDetailLines(width int) []string {
 	groupName := m.modalSource
 	visible, total := m.getGroupCounts(groupName)
-	stateStr := "expanded"
+	stateVal := "▼ expanded"
 	if m.isCollapsed(groupName) {
-		stateStr = "collapsed"
+		stateVal = "▶ collapsed"
 	}
 
 	skills := m.sourceGroupSkills(groupName)
@@ -663,11 +758,18 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 		scopeStr = "unknown"
 	}
 
+	scopeVal := styledScopeBadge(scopeStr)
+
+	healthVal := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("✓ healthy")
+	if len(skillIssues) > 0 {
+		healthVal = errorStyle.Render("✗ issues detected")
+	}
+
 	lines := []string{
 		formatMetaLine("Source:", groupName, width),
-		formatMetaLine("State:", stateStr, width),
+		formatMetaLine("State:", stateVal, width),
 		formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
-		formatMetaLine("Scope:", scopeStr, width),
+		formatMetaLine("Scope:", scopeVal, width),
 	}
 
 	if len(folders) > 0 {
@@ -677,22 +779,32 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 		lines = append(lines, formatMetaLine("Ref:", refs[0], width))
 	}
 
-	healthStr := "healthy"
-	if len(skillIssues) > 0 {
-		healthStr = "issues detected"
-	}
-	lines = append(lines, formatMetaLine("Health:", healthStr, width))
+	lines = append(lines, formatMetaLine("Health:", healthVal, width))
 
 	if len(skillIssues) > 0 {
-		lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+		hasErrors := false
 		for _, issue := range skillIssues {
-			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
-			if issue.Path != "" {
-				line += " (" + issue.Path + ")"
+			if issue.Severity == "error" {
+				hasErrors = true
+				break
 			}
+		}
+		headerText := "▲ Warnings"
+		headerStyle := warningStyle.Bold(true)
+		if hasErrors {
+			headerText = "✗ Health Issues"
+			headerStyle = healthHeaderStyle
+		}
+		lines = append(lines, "", headerStyle.Render(headerText))
+		for _, issue := range skillIssues {
+			bullet := "  • "
 			style := warningStyle
 			if issue.Severity == "error" {
 				style = errorStyle
+			}
+			line := fmt.Sprintf("%s%s: %s", bullet, humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+			if issue.Path != "" {
+				line += " (" + issue.Path + ")"
 			}
 			lines = append(lines, style.Render(wrapText(line, width)))
 		}
@@ -707,14 +819,21 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 	for idx, cr := range childRows {
 		if !cr.isAvailable {
 			installedCount++
-			scopeBadgeStr := "P"
-			if cr.skill.Scope == model.ScopeGlobal {
-				scopeBadgeStr = "G"
-			}
-			label := fmt.Sprintf("%s [%s]", cr.skill.Name, scopeBadgeStr)
 			if idx == m.modalSelected {
-				lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+				scopeBadgeStr := "P"
+				if cr.skill.Scope == model.ScopeGlobal {
+					scopeBadgeStr = "G"
+				}
+				label := fmt.Sprintf("%s [%s]", cr.skill.Name, scopeBadgeStr)
+				lines = append(lines, selectedStyle.Render(fmt.Sprintf("› %s", label)))
 			} else {
+				var scopeBadgeStyled string
+				if cr.skill.Scope == model.ScopeProject {
+					scopeBadgeStyled = scopeProjectStyle.Render("[P]")
+				} else {
+					scopeBadgeStyled = scopeGlobalStyle.Render("[G]")
+				}
+				label := fmt.Sprintf("%s %s", cr.skill.Name, scopeBadgeStyled)
 				lines = append(lines, fmt.Sprintf("  %s", label))
 			}
 		}
@@ -754,10 +873,11 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 			for idx, cr := range childRows {
 				if cr.isAvailable {
 					availableCount++
-					label := fmt.Sprintf("%s [available]", cr.discoveredSkill.Name)
 					if idx == m.modalSelected {
-						lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+						label := fmt.Sprintf("%s [available]", cr.discoveredSkill.Name)
+						lines = append(lines, selectedStyle.Render(fmt.Sprintf("› %s", label)))
 					} else {
+						label := fmt.Sprintf("%s %s", cr.discoveredSkill.Name, lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("[available]"))
 						lines = append(lines, fmt.Sprintf("  %s", label))
 					}
 				}
@@ -779,7 +899,7 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 			lines = append(lines,
 				titleStyle.Render(ds.Name+" [available]"),
 				"",
-				formatMetaLine("Status:", "available", width),
+				formatMetaLine("Status:", lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("available"), width),
 				formatMetaLine("Source:", ds.Source, width),
 			)
 			if ds.SkillPath != "" {
@@ -798,11 +918,15 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 		} else {
 			sk := selectedChild.skill
 			view := display.Skill(sk)
+			lockVal := display.LockSummary(view)
+			if lockVal == "not tracked" {
+				lockVal = warningStyle.Render("not tracked")
+			}
 			lines = append(lines,
 				titleStyle.Render(view.Name),
 				"",
-				formatMetaLine("Scope:", string(view.Scope), width),
-				formatMetaLine("Lock:", display.LockSummary(view), width),
+				formatMetaLine("Scope:", styledScopeBadge(string(view.Scope)), width),
+				formatMetaLine("Lock:", lockVal, width),
 			)
 			if sourceLines := sourceDetailLines(sk, width); len(sourceLines) > 0 {
 				lines = append(lines, sourceLines...)
@@ -854,7 +978,15 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			case "missing_agent_link":
 				statusText = "not linked"
 			}
-			val := fmt.Sprintf("%s: %s", visibility.Display, statusText)
+			var statusStyled string
+			if visibility.Visible {
+				statusStyled = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render(statusText)
+			} else if visibility.Reason == "broken_symlink" {
+				statusStyled = errorStyle.Render(statusText)
+			} else {
+				statusStyled = dimStyle.Render(statusText)
+			}
+			val := fmt.Sprintf("%s: %s", visibility.Display, statusStyled)
 			if visibility.Path != "" {
 				val += " at " + visibility.Path
 			}
@@ -906,7 +1038,15 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			}
 		}
 	}
-	val := fmt.Sprintf("Available to %d/%d %s", visible, total, label)
+	var val string
+	fraction := fmt.Sprintf("%d/%d", visible, total)
+	if visible == total && total > 0 {
+		val = fmt.Sprintf("Available to %s %s", lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render(fraction), label)
+	} else if visible > 0 {
+		val = fmt.Sprintf("Available to %s %s", warningStyle.Render(fraction), label)
+	} else {
+		val = fmt.Sprintf("Available to %s %s", errorStyle.Render(fraction), label)
+	}
 	return []string{formatMetaLine("Visibility:", val, width)}
 }
 
