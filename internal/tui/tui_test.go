@@ -1482,7 +1482,7 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 	m.selected = 0 // select header row owner/one
 	m.collapsedGroups["owner/one"] = true
 	outHeader := m.View()
-	if !strings.Contains(outHeader, "State:       collapsed") || !strings.Contains(outHeader, "Only installed skills are known until discovery (d).") {
+	if !strings.Contains(outHeader, "State:       collapsed") {
 		t.Fatalf("expected header placeholder/metadata in Metadata pane, got:\n%s", outHeader)
 	}
 
@@ -1540,9 +1540,6 @@ func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
 	}
 	if strings.Contains(metaJoined, "Hash:") {
 		t.Errorf("hash should no longer appear in metadata, got %q", metaJoined)
-	}
-	if !strings.Contains(metaJoined, "Only installed skills are known until discovery (d).") {
-		t.Errorf("expected local knowledge disclaimer in metadata, got %q", metaJoined)
 	}
 
 	// 2. Assert source preview listing installed skills

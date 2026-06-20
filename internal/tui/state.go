@@ -532,7 +532,12 @@ func (m appModel) getThreePaneLayout() (listWidth, rightWidth, topHeight, bottom
 	}
 	rightWidth = width - listWidth
 
-	topHeight = height * 4 / 10
+	// Metadata is a compact, scrollable info pane now, so cap its height and
+	// hand the surplus to the skill preview below it.
+	topHeight = height * 3 / 10
+	if topHeight > 12 {
+		topHeight = 12
+	}
 	if topHeight < 5 {
 		topHeight = 5
 	}

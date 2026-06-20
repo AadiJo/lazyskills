@@ -415,11 +415,6 @@ func (m appModel) metadataLines(width int) []string {
 		}
 		lines = append(lines, formatMetaLine("Health:", healthStr, width))
 
-		lines = append(lines,
-			"",
-			dimStyle.Render("Only installed skills are known until discovery (d)."),
-		)
-
 		if len(skillIssues) > 0 {
 			lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
 			for _, issue := range skillIssues {
