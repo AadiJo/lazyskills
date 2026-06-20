@@ -30,20 +30,7 @@ func (m *appModel) syncViewport() {
 		return
 	}
 	if m.detailModal || m.commands {
-		modalWidth := 80
-		if layout.Width < modalWidth+4 {
-			modalWidth = layout.Width - 4
-		}
-		if modalWidth < 20 {
-			modalWidth = 20
-		}
-		modalHeight := 24
-		if layout.Height < modalHeight+4 {
-			modalHeight = layout.Height - 4
-		}
-		if modalHeight < 7 {
-			modalHeight = 7
-		}
+		modalWidth, modalHeight := detailModalDimensions(layout)
 		m.viewport.Width = modalWidth - 4
 		m.viewport.Height = modalHeight - 6
 		m.viewport.SetContent(m.detailText(modalWidth - 4))

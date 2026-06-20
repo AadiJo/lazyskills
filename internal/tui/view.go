@@ -1064,7 +1064,13 @@ func (m appModel) detectedAgentSet() map[string]bool {
 }
 
 func (m appModel) commandsOverlay(layout appLayout) string {
-	modalWidth := 70
+	modalWidth := int(float64(layout.Width) * 0.75)
+	if modalWidth < 70 {
+		modalWidth = 70
+	}
+	if modalWidth > 110 {
+		modalWidth = 110
+	}
 	if layout.Width < modalWidth+4 {
 		modalWidth = layout.Width - 4
 	}
@@ -1277,20 +1283,7 @@ func (m appModel) helpModalOverlay(layout appLayout) string {
 }
 
 func (m appModel) detailModalOverlay(layout appLayout) string {
-	modalWidth := 80
-	if layout.Width < modalWidth+4 {
-		modalWidth = layout.Width - 4
-	}
-	if modalWidth < 20 {
-		modalWidth = 20
-	}
-	modalHeight := 24
-	if layout.Height < modalHeight+4 {
-		modalHeight = layout.Height - 4
-	}
-	if modalHeight < 7 {
-		modalHeight = 7
-	}
+	modalWidth, modalHeight := detailModalDimensions(layout)
 
 	m.viewport.Width = modalWidth - 4
 	m.viewport.Height = modalHeight - 6

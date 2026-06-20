@@ -131,6 +131,37 @@ func viewHeight(height int) int {
 	return 32
 }
 
+func detailModalDimensions(layout appLayout) (width, height int) {
+	width = int(float64(layout.Width) * 0.85)
+	if width < 80 {
+		width = 80
+	}
+	if width > 140 {
+		width = 140
+	}
+	if layout.Width < width+4 {
+		width = layout.Width - 4
+	}
+	if width < 20 {
+		width = 20
+	}
+
+	height = int(float64(layout.Height) * 0.80)
+	if height < 24 {
+		height = 24
+	}
+	if height > 45 {
+		height = 45
+	}
+	if layout.Height < height+4 {
+		height = layout.Height - 4
+	}
+	if height < 7 {
+		height = 7
+	}
+	return width, height
+}
+
 func newAppLayout(width, height int) appLayout {
 	width = viewWidth(width)
 	height = viewHeight(height)
