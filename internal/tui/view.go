@@ -1191,7 +1191,7 @@ func (m appModel) detailModalTitle() string {
 
 func (m appModel) detailModalHelpLine() string {
 	if m.modalSource != "" {
-		return "esc/q close · ↑/↓ select · enter/c actions · d scan · o/u/x installed"
+		return "esc/q close · ↑/↓ select · enter install/open · c more · d scan"
 	}
 	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
 }
@@ -1232,12 +1232,15 @@ func (m *appModel) ensureSourceModalSelectionVisible() {
 }
 
 func (m appModel) confirmationOverlay(layout appLayout) string {
-	actions := m.currentActions()
 	title := "Confirm action"
 	phrase := ""
 	command := ""
-	if len(actions) > 0 && m.action < len(actions) {
-		action := actions[m.action]
+	if m.pendingAction != nil {
+		title = compat.SanitizeMetadata(m.pendingAction.Title)
+		phrase = compat.SanitizeMetadata(m.pendingAction.ConfirmValue)
+		command = compat.SanitizeMetadata(m.pendingAction.Command)
+	} else if acts := m.currentActions(); len(acts) > 0 && m.action < len(acts) {
+		action := acts[m.action]
 		title = compat.SanitizeMetadata(action.Title)
 		phrase = compat.SanitizeMetadata(action.ConfirmValue)
 		command = compat.SanitizeMetadata(action.Command)

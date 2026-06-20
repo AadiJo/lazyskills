@@ -118,13 +118,42 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.startSkillActionByID(child.skill, "remove")
 					}
 				}
-			case "c", "enter":
-				// Act on the selected child: open the action picker (install for
-				// an available skill, open/update/remove for an installed one).
+			case "c":
+				// Open the full action picker for the selected child.
 				m.detailModal = false
 				m.commands = true
 				m.action = 0
 				m.syncViewport()
+			case "enter":
+				// Primary action on the selected child: install an available
+				// skill (with confirm), or open an installed one.
+				if m.modalSource != "" {
+					if child, ok := m.currentModalSelectedChild(); ok {
+						if child.isAvailable {
+							for _, a := range actions.ForAvailableSkill(m.modalSource, child.discoveredSkill.Name) {
+								if a.ID != "install_skill" || !a.Available {
+									continue
+								}
+								m.detailModal = false
+								m.modalSource = ""
+								if a.RequiresConfirm {
+									armed := a
+									m.pendingAction = &armed
+									m.confirming = true
+									m.confirmInput = ""
+									m.confirmError = ""
+									m.syncViewport()
+									return m, nil
+								}
+								return m.executeAction(a)
+							}
+						} else {
+							m.detailModal = false
+							m.modalSource = ""
+							return m.startSkillActionByID(child.skill, "open_skill")
+						}
+					}
+				}
 			case "d":
 				if m.modalSource != "" {
 					modelTmp, cmd := m.startDiscovery(m.modalSource)
@@ -196,11 +225,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirming = false
 				m.confirmInput = ""
 				m.confirmError = ""
+				m.pendingAction = nil
 			case "n":
 				if m.confirmInput == "" {
 					m.confirming = false
 					m.confirmInput = ""
 					m.confirmError = ""
+					m.pendingAction = nil
 				}
 			case "pgdown", "ctrl+d", "pgup", "ctrl+u":
 				var cmd tea.Cmd
@@ -685,17 +716,23 @@ func preferredRemoveActionID(selectedCount int) string {
 }
 
 func (m appModel) confirmAction() (tea.Model, tea.Cmd) {
-	actions := m.currentActions()
-	if len(actions) == 0 || m.action >= len(actions) {
-		return m, nil
+	var action actions.CommandPreview
+	if m.pendingAction != nil {
+		action = *m.pendingAction
+	} else {
+		acts := m.currentActions()
+		if len(acts) == 0 || m.action >= len(acts) {
+			return m, nil
+		}
+		action = acts[m.action]
 	}
-	action := actions[m.action]
 	if !confirmationAccepted(m.confirmInput, action.ConfirmValue) {
 		m.confirmError = "Type yes, y, or the displayed phrase. Press Esc to cancel."
 		m.confirmInput = ""
 		m.syncViewport()
 		return m, nil
 	}
+	m.pendingAction = nil
 	return m.executeAction(action)
 }
 

@@ -2032,11 +2032,15 @@ func TestInteractiveSourceDetailModal(t *testing.T) {
 		t.Fatal("expected opening unchecked source modal to trigger discovery command")
 	}
 
-	// 3. Opening source modal does not repeatedly trigger discovery when already loading/ready/failed
-	m.discovery["owner/repo"] = SourceDiscovery{Status: DiscoveryLoading}
-	_, cmdLoading := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmdLoading != nil {
-		t.Fatal("expected opening loading source modal not to trigger discovery command again")
+	// 3. Re-opening (from the sidebar) an already-loading source doesn't re-trigger
+	//    discovery. Use a modal-closed copy so enter targets the header, leaving the
+	//    open modal in m intact for the steps below.
+	mLoading := m
+	mLoading.detailModal = false
+	mLoading.modalSource = ""
+	mLoading.discovery = map[string]SourceDiscovery{"owner/repo": {Status: DiscoveryLoading}}
+	if _, cmdLoading := mLoading.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmdLoading != nil {
+		t.Fatal("expected re-opening a loading source not to trigger discovery again")
 	}
 
 	// Let's set it to ready with some available skills
@@ -2141,6 +2145,36 @@ func TestInteractiveSourceDetailModal(t *testing.T) {
 	}
 	if !strings.Contains(viewOut, "AvailableSkill [available]") {
 		t.Fatal("expected view to contain AvailableSkill [available]")
+	}
+}
+
+func TestModalEnterInstallsAvailableSkill(t *testing.T) {
+	m := appModel{width: 120, height: 32, detailModal: true, modalSource: "owner/repo", modalSelected: 1,
+		result: model.ScanResult{Skills: []*model.Skill{
+			{Name: "Installed", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}},
+		}}}
+	m.discovery = map[string]SourceDiscovery{
+		"owner/repo": {Status: DiscoveryReady, Skills: []DiscoveredSkill{
+			{Name: "Installed", Source: "owner/repo"},
+			{Name: "Available", Source: "owner/repo"},
+		}},
+	}
+	// modalSelected 1 = the available child.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(appModel)
+	if next.detailModal {
+		t.Fatal("expected enter on available child to close the modal")
+	}
+	if !next.confirming || next.pendingAction == nil {
+		t.Fatalf("expected enter to arm install confirmation, confirming=%v pending=%v", next.confirming, next.pendingAction)
+	}
+	if next.pendingAction.ID != "install_skill" {
+		t.Fatalf("expected pending install_skill action, got %q", next.pendingAction.ID)
+	}
+	// Cancel clears the pending action.
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if c := updated.(appModel); c.confirming || c.pendingAction != nil {
+		t.Fatalf("expected esc to clear confirm, confirming=%v pending=%v", c.confirming, c.pendingAction)
 	}
 }
 
