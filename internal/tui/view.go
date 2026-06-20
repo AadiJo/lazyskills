@@ -1,0 +1,1355 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/display"
+	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/charmbracelet/lipgloss"
+)
+
+func (m appModel) View() string {
+	if m.err != nil {
+		return fitToScreen(errorStyle.Render(fmt.Sprintf("LazySkills error: %s\n\nPress q to quit.", compat.SanitizeMetadata(m.err.Error()))), viewWidth(m.width), viewHeight(m.height))
+	}
+	layout := newAppLayout(m.width, m.height)
+	if layout.Small {
+		return smallTerminalView(layout.Width, layout.Height)
+	}
+
+	// Keep View pure for callers: sync a local copy so render-time fallback
+	// sizing does not mutate the model stored by Bubble Tea.
+	viewModel := m
+	viewModel.width = layout.Width
+	viewModel.height = layout.Height
+	viewModel.syncViewport()
+
+	listWidth, rightWidth, topHeight, bottomHeight := viewModel.getThreePaneLayout()
+
+	listLayout := newPaneLayout(listWidth, viewModel.height-1)
+	metadataLayout := newPaneLayout(rightWidth, topHeight)
+	previewLayout := newPaneLayout(rightWidth, bottomHeight)
+
+	listStyle := paneStyle(listLayout, viewModel.focus == focusSkills)
+	metadataStyle := paneStyle(metadataLayout, viewModel.focus == focusMetadata)
+	previewStyle := paneStyle(previewLayout, viewModel.focus == focusPreview)
+
+	listContent := fitLines(viewModel.listPane(listLayout.ContentHeight, listLayout.ContentWidth), listLayout.ContentHeight)
+	list := decoratePane(listStyle.Render(listContent), listLayout, viewModel.focus == focusSkills, viewModel.listTitle())
+
+	metadataContent := fitLines(viewModel.metadataViewport.View(), metadataLayout.ContentHeight)
+	metadata := decoratePane(metadataStyle.Render(metadataContent), metadataLayout, viewModel.focus == focusMetadata, "2 Metadata")
+
+	previewContent := fitLines(viewModel.previewViewport.View(), previewLayout.ContentHeight)
+	preview := decoratePane(previewStyle.Render(previewContent), previewLayout, viewModel.focus == focusPreview, "3 Preview")
+
+	rightSide := lipgloss.JoinVertical(lipgloss.Left, metadata, preview)
+	view := lipgloss.JoinHorizontal(lipgloss.Top, list, rightSide)
+
+	if viewModel.detailModal {
+		return viewModel.detailModalOverlay(layout)
+	}
+	if viewModel.helpOpen {
+		return viewModel.helpModalOverlay(layout)
+	}
+	if viewModel.running {
+		return viewModel.runningOverlay(layout)
+	}
+	if viewModel.confirming {
+		return viewModel.confirmationOverlay(layout)
+	}
+	if viewModel.commands {
+		return viewModel.commandsOverlay(layout)
+	}
+	footer := viewModel.footerText(layout.Width)
+	return view + "\n" + footer
+}
+
+func scopeBadge(scope string) string {
+	switch scope {
+	case string(model.ScopeProject):
+		return "P"
+	case string(model.ScopeGlobal):
+		return "G"
+	default:
+		return compat.SanitizeMetadata(scope)
+	}
+}
+
+func (m appModel) listTitle() string {
+	title := "1 Inventory"
+	if m.agent != "" {
+		title = "1 Inventory (" + m.agentLabel() + ")"
+	}
+	return title
+}
+
+func (m appModel) listPane(height, width int) string {
+	items := m.filteredSkills()
+	var lines []string
+	if len(items) == 0 {
+		var detail []string
+		if m.result.Preflight != nil && !m.result.Preflight.CanRunSkills {
+			detail = append(detail,
+				errorStyle.Render("Missing Dependencies:"),
+				"LazySkills cannot execute commands because required",
+				"tools are missing.",
+				"",
+				"Please install Node.js & npm (which provides npx),",
+				"or install the 'skills' CLI directly.",
+			)
+		} else if len(m.result.Skills) == 0 {
+			detail = append(detail,
+				"No skills found on your machine or project.",
+				"",
+				"To get started:",
+				"1. Press 'c' to open actions and select 'skills init'.",
+				"2. Or run 'skills find' to discover online skills.",
+				"3. Or check documentation to manually link skills.",
+			)
+		} else {
+			// Filters are active
+			detail = append(detail, "No skills matched active filters.")
+			if m.search != "" {
+				detail = append(detail, "", fmt.Sprintf("• Search: '%s' (press Backspace to clear)", m.search))
+			}
+			if m.agent != "" {
+				detail = append(detail, "", fmt.Sprintf("• Agent: '%s' has no compatible/visible skills in this view.", m.agentLabel()))
+			}
+			if m.filter == scopeProject {
+				detail = append(detail, "", "• Scope: Project (press Tab to switch to Global)")
+			} else if m.filter == scopeGlobal {
+				detail = append(detail, "", "• Scope: Global (press Tab to switch to Project)")
+			}
+		}
+
+		wrappedLines := []string{""}
+		for _, line := range detail {
+			if line == "" {
+				wrappedLines = append(wrappedLines, "")
+			} else {
+				wrappedLines = append(wrappedLines, dimStyle.Render(truncate(line, width)))
+			}
+		}
+		return strings.Join(wrappedLines, "\n")
+	}
+
+	// Active status headers (clean, non-verbose)
+	if m.search != "" {
+		lines = append(lines, dimStyle.Render("Search: /"+m.search))
+	}
+	if m.agent != "" {
+		lines = append(lines, dimStyle.Render("Agent:  "+m.agentLabel()))
+	}
+	if m.result.Preflight != nil && !m.result.Preflight.CanRunSkills {
+		lines = append(lines, errorStyle.Render("✗ Missing dependencies (press ? for help)"))
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+	}
+
+	visible := max(1, height-len(lines))
+	vRows := m.visibleRows()
+	var renderedRows []string
+	selectedRow := m.selected
+
+	for idx, row := range vRows {
+		var line string
+		if row.isHeader {
+			affordance := "- "
+			if m.isCollapsed(row.groupName) {
+				affordance = "+ "
+			}
+			headerText := affordance + row.groupName
+			if idx == selectedRow {
+				line = selectedStyle.Render(truncate(headerText, width))
+			} else {
+				line = dimStyle.Render(truncate(headerText, width))
+			}
+		} else if row.isAvailable {
+			ds := row.discoveredSkill
+			coreLabel := fmt.Sprintf("  + %s [available]", ds.Name)
+			truncatedCore := truncate(coreLabel, width)
+			if idx == selectedRow {
+				line = selectedStyle.Render(truncatedCore)
+			} else {
+				line = dimStyle.Render(truncatedCore)
+			}
+		} else {
+			view := display.Skill(row.skill)
+			mark := "  "
+			if m.isSelected(row.skill) {
+				mark = "● "
+			}
+			coreLabel := fmt.Sprintf("%s%s [%s]", mark, view.Name, scopeBadge(view.Scope))
+			if m.agent != "" {
+				coreLabel += " " + agentVisibilityBadge(row.skill, m.agent)
+			}
+			issueErrors, issueWarnings := healthIssueCounts(view.HealthIssues)
+			badgeLen := 0
+			if issueErrors > 0 {
+				badgeLen = len(fmt.Sprintf(" !%d", issueErrors))
+			} else if issueWarnings > 0 {
+				badgeLen = len(fmt.Sprintf(" ⚠ %d", issueWarnings))
+			}
+			truncatedCore := truncate(coreLabel, width-badgeLen)
+			if idx == selectedRow {
+				badge := ""
+				if issueErrors > 0 {
+					badge = fmt.Sprintf(" !%d", issueErrors)
+				} else if issueWarnings > 0 {
+					badge = fmt.Sprintf(" ⚠ %d", issueWarnings)
+				}
+				line = selectedStyle.Render(truncatedCore + badge)
+			} else if issueErrors > 0 {
+				badge := errorStyle.Render(fmt.Sprintf(" !%d", issueErrors))
+				line = errorStyle.Render(truncatedCore) + badge
+			} else if issueWarnings > 0 {
+				badge := warningStyle.Render(fmt.Sprintf(" ⚠ %d", issueWarnings))
+				line = truncatedCore + badge
+			} else {
+				line = truncatedCore
+			}
+		}
+		renderedRows = append(renderedRows, line)
+	}
+
+	start := 0
+	if selectedRow >= visible {
+		start = selectedRow - visible + 1
+	}
+	end := min(len(renderedRows), start+visible)
+	for _, line := range renderedRows[start:end] {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func healthIssueCounts(issues []display.HealthIssueView) (errors int, warnings int) {
+	for _, issue := range issues {
+		if issue.Severity == "error" {
+			errors++
+		} else {
+			warnings++
+		}
+	}
+	return errors, warnings
+}
+
+func humanHealthIssueType(issueType string) string {
+	switch issueType {
+	case "missing_skill_md":
+		return "Missing SKILL.md"
+	case "invalid_frontmatter":
+		return "Invalid Frontmatter"
+	case "broken_symlink":
+		return "Broken Symlink"
+	case "missing_project_lock":
+		return "Not Tracked in Project"
+	case "missing_global_lock":
+		return "Not Tracked in Global"
+	case "ghost_agent_skill":
+		return "Agent-specific skill"
+	case "duplicate_name":
+		return "Duplicate Name"
+	case "project_global_shadowing":
+		return "Name Conflict"
+	case "lock_without_files":
+		return "Lock Entry Missing Files"
+	default:
+		return strings.ReplaceAll(issueType, "_", " ")
+	}
+}
+
+func humanHealthIssueMessage(issueType, message string) string {
+	switch issueType {
+	case "ghost_agent_skill":
+		return "This skill is custom/untracked and only installed for specific agents."
+	case "missing_project_lock":
+		return "This skill is not tracked by the project lock."
+	case "missing_global_lock":
+		return "This skill is not tracked by the global lock."
+	default:
+		return message
+	}
+}
+
+func (m appModel) detailText(width int) string {
+	return strings.Join(m.detailLines(width), "\n")
+}
+
+func (m appModel) metadataLines(width int) []string {
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		var lines []string
+
+		if len(m.result.HealthIssues) > 0 {
+			lines = append(lines, errorStyle.Render("Scan health:"), "")
+			for _, issue := range m.result.HealthIssues {
+				lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
+			}
+			lines = append(lines, "")
+		}
+
+		if m.result.Preflight != nil && !m.result.Preflight.CanRunSkills {
+			lines = append(lines,
+				errorStyle.Render("Dependency Issue"),
+				wrapText("LazySkills requires the 'skills' CLI or Node.js/npm (npx) to be installed and available in your PATH.", width),
+				"",
+				dimStyle.Render("Status:"),
+			)
+			for _, tool := range []string{"skills", "npx", "node", "npm"} {
+				status := "missing"
+				style := errorStyle
+				if m.result.Preflight.Tools[tool].Exists {
+					status = "available"
+					style = successStyle
+				}
+				lines = append(lines, style.Render(fmt.Sprintf("  • %s: %s", tool, status)))
+			}
+		} else if len(m.result.Skills) == 0 {
+			lines = append(lines,
+				sectionHeaderStyle.Render("Welcome to LazySkills!"),
+				"",
+				wrapText("No skills were found in your project or global directory.", width),
+				"",
+				dimStyle.Render("Quick Onboarding:"),
+				wrapText("1. Press 'c' to open actions and choose 'Initialize skills in project' to create a local skills directory.", width),
+				wrapText("2. Choose 'Find new skills (interactive)' to search and install online skills.", width),
+				wrapText("3. Link your existing skills using symlinks.", width),
+			)
+		} else {
+			lines = append(lines,
+				dimStyle.Render("Select a skill to inspect it."),
+			)
+			if m.search != "" {
+				lines = append(lines, "", dimStyle.Render(fmt.Sprintf("Active search: '%s'", m.search)))
+			}
+			if m.agent != "" {
+				lines = append(lines, "", dimStyle.Render(fmt.Sprintf("Active agent filter: '%s'", m.agentLabel())))
+			}
+		}
+
+		return lines
+	}
+
+	if m.selected < 0 || m.selected >= len(rows) {
+		return []string{dimStyle.Render("Select a skill to inspect it.")}
+	}
+
+	row := rows[m.selected]
+	if row.isHeader {
+		visible, total := m.getGroupCounts(row.groupName)
+		stateStr := "expanded"
+		if m.isCollapsed(row.groupName) {
+			stateStr = "collapsed"
+		}
+
+		skills := m.sourceGroupSkills(row.groupName)
+		var folders, refs, hashes []string
+		var projectCount, globalCount int
+		var skillIssues []display.HealthIssueView
+
+		for _, sk := range skills {
+			info := sourceInfo(sk)
+			if info.Folder != "" {
+				folders = append(folders, info.Folder)
+			}
+			if info.Ref != "" {
+				refs = append(refs, info.Ref)
+			}
+			var h string
+			if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
+				h = sk.LocalLock.ComputedHash
+			} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
+				h = sk.GlobalLock.SkillFolderHash
+			}
+			if h != "" {
+				hashes = append(hashes, h)
+			}
+			if sk.Scope == model.ScopeProject {
+				projectCount++
+			} else if sk.Scope == model.ScopeGlobal {
+				globalCount++
+			}
+
+			// Parse health issues
+			view := display.Skill(sk)
+			skillIssues = append(skillIssues, view.HealthIssues...)
+		}
+
+		scopeStr := "mixed"
+		if projectCount > 0 && globalCount == 0 {
+			scopeStr = "project"
+		} else if globalCount > 0 && projectCount == 0 {
+			scopeStr = "global"
+		} else if projectCount == 0 && globalCount == 0 {
+			scopeStr = "unknown"
+		}
+
+		lines := []string{
+			formatMetaLine("Source:", row.groupName, width),
+			formatMetaLine("State:", stateStr, width),
+			formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
+			formatMetaLine("Scope:", scopeStr, width),
+		}
+
+		if len(folders) > 0 {
+			lines = append(lines, formatMetaLine("Folder:", folders[0], width))
+		}
+		if len(refs) > 0 {
+			lines = append(lines, formatMetaLine("Ref:", refs[0], width))
+		}
+		if len(hashes) > 0 {
+			lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
+		}
+
+		healthStr := "healthy"
+		if len(skillIssues) > 0 {
+			healthStr = "issues detected"
+		}
+		lines = append(lines, formatMetaLine("Health:", healthStr, width))
+
+		lines = append(lines,
+			"",
+			dimStyle.Render("Note: Only installed skills are known locally."),
+		)
+
+		if len(skillIssues) > 0 {
+			lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+			for _, issue := range skillIssues {
+				line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+				if issue.Path != "" {
+					line += " (" + issue.Path + ")"
+				}
+				style := warningStyle
+				if issue.Severity == "error" {
+					style = errorStyle
+				}
+				lines = append(lines, style.Render(wrapText(line, width)))
+			}
+		}
+		return lines
+	}
+
+	if row.isAvailable {
+		ds := row.discoveredSkill
+		lines := []string{
+			formatMetaLine("Skill:", ds.Name, width),
+			formatMetaLine("Status:", "available", width),
+			formatMetaLine("Source:", ds.Source, width),
+		}
+		if ds.SkillPath != "" {
+			lines = append(lines, formatMetaLine("Path:", ds.SkillPath, width))
+		}
+		lines = append(lines, "", wrapText(ds.Description, width))
+		return lines
+	}
+
+	view := display.Skill(row.skill)
+	lines := []string{
+		formatMetaLine("Scope:", string(view.Scope), width),
+		formatMetaLine("Lock:", display.LockSummary(view), width),
+	}
+	if sourceLines := sourceDetailLines(row.skill, width); len(sourceLines) > 0 {
+		lines = append(lines, sourceLines...)
+	}
+	if view.CanonicalPath != "" {
+		lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
+	}
+	if m.agent != "" {
+		lines = append(lines, formatMetaLine("Agent:", m.agentLabel(), width))
+	}
+	lines = append(lines, m.visibilitySummary(view, width)...)
+	if len(view.Observed) > 0 && m.agent == "" {
+		agentsSet := map[string]bool{}
+		observedAgents := []string{}
+		for _, p := range view.Observed {
+			if p.Agent != "" && !agentsSet[p.Agent] {
+				agentsSet[p.Agent] = true
+				observedAgents = append(observedAgents, p.Agent)
+			}
+		}
+		if len(observedAgents) > 0 {
+			lines = append(lines, formatMetaLine("Observed:", strings.Join(observedAgents, ", "), width))
+		}
+	}
+
+	if len(view.Observed) > 0 && m.agent != "" {
+		showObservedSection := false
+		for _, p := range view.Observed {
+			if p.Agent == m.agent {
+				if !showObservedSection {
+					lines = append(lines, "", sectionHeaderStyle.Render("Observed Paths"))
+					showObservedSection = true
+				}
+				line := fmt.Sprintf("- %s %s %s", p.Agent, p.Scope, p.Status)
+				if p.TargetPath != "" {
+					line += " → " + p.TargetPath
+				}
+				lines = append(lines, wrapText(line, width))
+			}
+		}
+	}
+
+	if len(view.HealthIssues) > 0 {
+		issueErrors, _ := healthIssueCounts(view.HealthIssues)
+		headerStyle := warningStyle.Bold(true)
+		header := "Warnings"
+		if issueErrors > 0 {
+			headerStyle = healthHeaderStyle
+			header = "Health Issues"
+		}
+		lines = append(lines, "", headerStyle.Render(header))
+		for _, issue := range view.HealthIssues {
+			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+			if issue.Path != "" {
+				line += " (" + issue.Path + ")"
+			}
+			style := warningStyle
+			if issue.Severity == "error" {
+				style = errorStyle
+			}
+			lines = append(lines, style.Render(wrapText(line, width)))
+		}
+	}
+
+	if len(m.result.HealthIssues) > 0 {
+		lines = append(lines, "", errorStyle.Render("Scan health"))
+		for _, issue := range m.result.HealthIssues {
+			lines = append(lines, truncate(fmt.Sprintf("- %s: %s", compat.SanitizeMetadata(issue.Type), compat.SanitizeMetadata(issue.Message)), width))
+		}
+	}
+
+	return lines
+}
+
+func (m appModel) previewLines(width int) []string {
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		if m.result.Preflight != nil && !m.result.Preflight.CanRunSkills {
+			return []string{
+				errorStyle.Render("Preview Unavailable"),
+				"Dependencies are missing.",
+			}
+		}
+		return []string{
+			dimStyle.Render("No skill selected for preview."),
+		}
+	}
+
+	if m.selected < 0 || m.selected >= len(rows) {
+		return []string{dimStyle.Render("No skill selected for preview.")}
+	}
+
+	row := rows[m.selected]
+	if row.isHeader {
+		disc, discOk := m.discovery[row.groupName]
+		lines := []string{
+			sectionHeaderStyle.Render("Installed Skills:"),
+		}
+		skills := m.sourceGroupSkills(row.groupName)
+		if len(skills) == 0 {
+			lines = append(lines, "  No installed skills under this source.")
+		} else {
+			for _, sk := range skills {
+				scopeBadgeStr := "[P]"
+				if sk.Scope == model.ScopeGlobal {
+					scopeBadgeStr = "[G]"
+				}
+				lines = append(lines, fmt.Sprintf("  • %s %s", sk.Name, scopeBadgeStr))
+			}
+		}
+
+		lines = append(lines, "")
+
+		_, _, isRemote := parseRemoteGitHubSource(row.groupName)
+		statusHeader := sectionHeaderStyle.Render("Available Skills:")
+		if !discOk {
+			if isRemote {
+				lines = append(lines, statusHeader, "  Remote source discovery not run yet. Press 'd' to scan.")
+			} else {
+				lines = append(lines, statusHeader, "  Local source discovery not run yet. Press 'd' to scan.")
+			}
+		} else {
+			switch disc.Status {
+			case DiscoveryLoading:
+				if isRemote {
+					lines = append(lines, statusHeader, "  Cloning and scanning remote repository...")
+				} else {
+					lines = append(lines, statusHeader, "  Scanning local checkout...")
+				}
+			case DiscoveryFailed:
+				lines = append(lines, statusHeader, fmt.Sprintf("  Discovery failed: %s", disc.Error))
+			case DiscoveryReady:
+				var avails []DiscoveredSkill
+				for _, ds := range disc.Skills {
+					if !m.isSkillInstalled(ds.Name, row.groupName) {
+						avails = append(avails, ds)
+					}
+				}
+				if len(avails) == 0 {
+					if isRemote {
+						lines = append(lines, statusHeader, "  All discovered skills from this remote repository are installed.")
+					} else {
+						lines = append(lines, statusHeader, "  All discovered skills from this local source are installed.")
+					}
+				} else {
+					lines = append(lines, statusHeader)
+					for _, av := range avails {
+						lines = append(lines, fmt.Sprintf("  + %s", av.Name))
+					}
+				}
+			}
+		}
+
+		lines = append(lines,
+			"",
+			dimStyle.Render("Discovery shows installed and available skills from this source."),
+			dimStyle.Render("Use d to refresh local/remote source discovery."),
+		)
+		var wrapped []string
+		for _, line := range lines {
+			wrapped = append(wrapped, wrapText(line, width))
+		}
+		return wrapped
+	}
+
+	if row.isAvailable {
+		ds := row.discoveredSkill
+		if ds.Preview != "" {
+			var lines []string
+			previewLines := strings.Split(ds.Preview, "\n")
+			for _, line := range previewLines {
+				lines = append(lines, wrapText(line, width))
+			}
+			return lines
+		}
+		return []string{
+			dimStyle.Render("No preview content found for this available skill."),
+			"",
+			dimStyle.Render("Press 'c' to open actions and install it."),
+		}
+	}
+
+	view := display.Skill(row.skill)
+	if view.Preview == "" {
+		return []string{dimStyle.Render("No preview available for this skill.")}
+	}
+
+	lines := []string{}
+	previewLines := strings.Split(view.Preview, "\n")
+	for _, line := range previewLines {
+		lines = append(lines, wrapText(line, width))
+	}
+	return lines
+}
+
+func (m appModel) detailLines(width int) []string {
+	if m.modalSource != "" {
+		return m.sourceModalDetailLines(width)
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return m.metadataLines(width)
+	}
+	row := rows[m.selected]
+	if row.isHeader || row.isAvailable {
+		return m.metadataLines(width)
+	}
+	view := display.Skill(row.skill)
+	lines := []string{
+		titleStyle.Render(view.Name),
+		"",
+	}
+	lines = append(lines, m.metadataLines(width)...)
+	if view.Preview != "" {
+		lines = append(lines, "")
+		previewDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Repeat("─", max(1, width)))
+		lines = append(lines, previewDivider)
+		lines = append(lines, sectionHeaderStyle.Render("Preview"), "")
+		lines = append(lines, m.previewLines(width)...)
+	}
+	return lines
+}
+
+func (m appModel) sourceModalDetailLines(width int) []string {
+	groupName := m.modalSource
+	visible, total := m.getGroupCounts(groupName)
+	stateStr := "expanded"
+	if m.isCollapsed(groupName) {
+		stateStr = "collapsed"
+	}
+
+	skills := m.sourceGroupSkills(groupName)
+	var folders, refs, hashes []string
+	var projectCount, globalCount int
+	var skillIssues []display.HealthIssueView
+
+	for _, sk := range skills {
+		info := sourceInfo(sk)
+		if info.Folder != "" {
+			folders = append(folders, info.Folder)
+		}
+		if info.Ref != "" {
+			refs = append(refs, info.Ref)
+		}
+		var h string
+		if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
+			h = sk.LocalLock.ComputedHash
+		} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
+			h = sk.GlobalLock.SkillFolderHash
+		}
+		if h != "" {
+			hashes = append(hashes, h)
+		}
+		if sk.Scope == model.ScopeProject {
+			projectCount++
+		} else if sk.Scope == model.ScopeGlobal {
+			globalCount++
+		}
+
+		view := display.Skill(sk)
+		skillIssues = append(skillIssues, view.HealthIssues...)
+	}
+
+	scopeStr := "mixed"
+	if projectCount > 0 && globalCount == 0 {
+		scopeStr = "project"
+	} else if globalCount > 0 && projectCount == 0 {
+		scopeStr = "global"
+	} else if projectCount == 0 && globalCount == 0 {
+		scopeStr = "unknown"
+	}
+
+	lines := []string{
+		formatMetaLine("Source:", groupName, width),
+		formatMetaLine("State:", stateStr, width),
+		formatMetaLine("Skills:", fmt.Sprintf("%d visible / %d total", visible, total), width),
+		formatMetaLine("Scope:", scopeStr, width),
+	}
+
+	if len(folders) > 0 {
+		lines = append(lines, formatMetaLine("Folder:", folders[0], width))
+	}
+	if len(refs) > 0 {
+		lines = append(lines, formatMetaLine("Ref:", refs[0], width))
+	}
+	if len(hashes) > 0 {
+		lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
+	}
+
+	healthStr := "healthy"
+	if len(skillIssues) > 0 {
+		healthStr = "issues detected"
+	}
+	lines = append(lines, formatMetaLine("Health:", healthStr, width))
+
+	if len(skillIssues) > 0 {
+		lines = append(lines, "", healthHeaderStyle.Render("Health Issues"))
+		for _, issue := range skillIssues {
+			line := fmt.Sprintf("- %s: %s", humanHealthIssueType(issue.Type), humanHealthIssueMessage(issue.Type, issue.Message))
+			if issue.Path != "" {
+				line += " (" + issue.Path + ")"
+			}
+			style := warningStyle
+			if issue.Severity == "error" {
+				style = errorStyle
+			}
+			lines = append(lines, style.Render(wrapText(line, width)))
+		}
+	}
+
+	lines = append(lines, "")
+
+	childRows := m.modalChildRows(groupName)
+
+	lines = append(lines, sectionHeaderStyle.Render("Installed Skills:"))
+	installedCount := 0
+	for idx, cr := range childRows {
+		if !cr.isAvailable {
+			installedCount++
+			scopeBadgeStr := "P"
+			if cr.skill.Scope == model.ScopeGlobal {
+				scopeBadgeStr = "G"
+			}
+			label := fmt.Sprintf("%s [%s]", cr.skill.Name, scopeBadgeStr)
+			if idx == m.modalSelected {
+				lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s", label))
+			}
+		}
+	}
+	if installedCount == 0 {
+		lines = append(lines, "  No installed skills under this source.")
+	}
+
+	lines = append(lines, "")
+
+	lines = append(lines, sectionHeaderStyle.Render("Available Skills:"))
+	disc, ok := m.discovery[groupName]
+	if !ok {
+		discoverable, reason := m.isSourceDiscoverable(groupName)
+		if !discoverable {
+			lines = append(lines, errorStyle.Render("  Discovery unavailable: "+reason))
+		} else {
+			lines = append(lines, dimStyle.Render("  Discovery pending..."))
+		}
+	} else {
+		switch disc.Status {
+		case DiscoveryLoading:
+			lines = append(lines, dimStyle.Render("  Scanning/cloning source..."))
+		case DiscoveryFailed:
+			lines = append(lines, errorStyle.Render("  Discovery failed: "+disc.Error))
+		case DiscoveryReady:
+			availableCount := 0
+			for idx, cr := range childRows {
+				if cr.isAvailable {
+					availableCount++
+					label := fmt.Sprintf("%s [available]", cr.discoveredSkill.Name)
+					if idx == m.modalSelected {
+						lines = append(lines, selectedStyle.Render(fmt.Sprintf("> %s", label)))
+					} else {
+						lines = append(lines, fmt.Sprintf("  %s", label))
+					}
+				}
+			}
+			if availableCount == 0 {
+				lines = append(lines, "  All discovered skills from this source are installed.")
+			}
+		}
+	}
+
+	if len(childRows) > 0 && m.modalSelected >= 0 && m.modalSelected < len(childRows) {
+		selectedChild := childRows[m.modalSelected]
+		lines = append(lines, "")
+		previewDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Repeat("─", max(1, width)))
+		lines = append(lines, previewDivider)
+
+		if selectedChild.isAvailable {
+			ds := selectedChild.discoveredSkill
+			lines = append(lines,
+				titleStyle.Render(ds.Name+" [available]"),
+				"",
+				formatMetaLine("Status:", "available", width),
+				formatMetaLine("Source:", ds.Source, width),
+			)
+			if ds.SkillPath != "" {
+				lines = append(lines, formatMetaLine("Path:", ds.SkillPath, width))
+			}
+			if ds.Description != "" {
+				lines = append(lines, "", wrapText(ds.Description, width))
+			}
+			if ds.Preview != "" {
+				lines = append(lines, "", sectionHeaderStyle.Render("Preview"), "")
+				previewLines := strings.Split(ds.Preview, "\n")
+				for _, line := range previewLines {
+					lines = append(lines, wrapText(line, width))
+				}
+			}
+		} else {
+			sk := selectedChild.skill
+			view := display.Skill(sk)
+			lines = append(lines,
+				titleStyle.Render(view.Name),
+				"",
+				formatMetaLine("Scope:", string(view.Scope), width),
+				formatMetaLine("Lock:", display.LockSummary(view), width),
+			)
+			if sourceLines := sourceDetailLines(sk, width); len(sourceLines) > 0 {
+				lines = append(lines, sourceLines...)
+			}
+			if view.CanonicalPath != "" {
+				lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
+			}
+			if view.Preview != "" {
+				lines = append(lines, "", sectionHeaderStyle.Render("Preview"), "")
+				previewLines := strings.Split(view.Preview, "\n")
+				for _, line := range previewLines {
+					lines = append(lines, wrapText(line, width))
+				}
+			}
+		}
+	}
+
+	return lines
+}
+
+func (m appModel) visibilitySummary(view display.SkillView, width int) []string {
+	if len(view.Visibility) == 0 {
+		return nil
+	}
+	if m.agent != "" {
+		for _, visibility := range view.Visibility {
+			if visibility.Agent != m.agent {
+				continue
+			}
+			statusText := "not linked"
+			if visibility.Visible {
+				statusText = "available"
+			}
+			switch visibility.Reason {
+			case "visible_via_universal_canonical", "visible_via_canonical":
+				statusText = "available (canonical)"
+			case "visible_via_symlink":
+				statusText = "available (symlinked)"
+			case "visible_via_copy":
+				statusText = "available (copied)"
+			case "broken_symlink":
+				statusText = "broken link"
+			case "unsupported_global":
+				statusText = "global unsupported"
+			case "agent_not_detected":
+				statusText = "agent not detected"
+			case "not_in_universal_canonical_dir":
+				statusText = "not in shared folder"
+			case "missing_agent_link":
+				statusText = "not linked"
+			}
+			val := fmt.Sprintf("%s: %s", visibility.Display, statusText)
+			if visibility.Path != "" {
+				val += " at " + visibility.Path
+			}
+			return []string{formatMetaLine("Visibility:", val, width)}
+		}
+		return []string{formatMetaLine("Visibility:", "no compatibility data for "+m.agentLabel(), width)}
+	}
+	if view.CanonicalPath == "" {
+		observedAgents := []string{}
+		for _, p := range view.Observed {
+			if p.Agent != "" {
+				displayName := p.Agent
+				for _, state := range m.result.Agents {
+					if state.Name == p.Agent {
+						displayName = state.Display
+						break
+					}
+				}
+				observedAgents = append(observedAgents, displayName)
+			}
+		}
+		if len(observedAgents) > 0 {
+			val := "Agent-specific: " + strings.Join(observedAgents, ", ")
+			return []string{formatMetaLine("Visibility:", val, width)}
+		}
+	}
+	detected := m.detectedAgentSet()
+	visible := 0
+	total := 0
+	label := "agents"
+	if len(detected) > 0 {
+		label = "detected agents"
+	}
+	for _, visibility := range view.Visibility {
+		if len(detected) > 0 && !detected[visibility.Agent] {
+			continue
+		}
+		total++
+		if visibility.Visible {
+			visible++
+		}
+	}
+	if total == 0 {
+		label = "agents"
+		total = len(view.Visibility)
+		for _, visibility := range view.Visibility {
+			if visibility.Visible {
+				visible++
+			}
+		}
+	}
+	val := fmt.Sprintf("Available to %d/%d %s", visible, total, label)
+	return []string{formatMetaLine("Visibility:", val, width)}
+}
+
+func (m appModel) detectedAgentSet() map[string]bool {
+	out := map[string]bool{}
+	for _, agent := range m.result.Agents {
+		if agent.Detected {
+			out[agent.Name] = true
+		}
+	}
+	return out
+}
+
+func (m appModel) commandsOverlay(layout appLayout) string {
+	modalWidth := 70
+	if layout.Width < modalWidth+4 {
+		modalWidth = layout.Width - 4
+	}
+	if modalWidth < 20 {
+		modalWidth = 20
+	}
+
+	lines := m.commandPreview(nil, modalWidth-4)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(actionBorderColor).
+		Padding(1, 2).
+		Width(modalWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
+func (m appModel) commandPreview(sk *model.Skill, width int) []string {
+	title := " Actions "
+	if count := m.selectedCount(); count > 0 {
+		title = fmt.Sprintf(" Bulk actions · %d selected ", count)
+	}
+	lines := []string{actionTitleStyle.Render(title)}
+	lines = append(lines, dimStyle.Render("  ↑/↓ choose · enter run · c/esc close"))
+	if m.running {
+		lines = append(lines, "", "  "+runningStyle.Render("Running action..."))
+	}
+	if m.confirming {
+		lines = append(lines, "", "  "+errorStyle.Render("Confirmation pending"))
+	}
+	if m.actionResult != nil {
+		lines = append(lines, "")
+		lines = append(lines, m.renderActionResult(width)...)
+	}
+	for i, preview := range m.currentActions() {
+		selector := "  "
+		if i == m.action {
+			selector = "› "
+		}
+		if !preview.Available {
+			titleText := fmt.Sprintf("%s (unavailable)", compat.SanitizeMetadata(preview.Title))
+			if i == m.action {
+				titleLine := activeActionTitleStyle.Render(padRight(selector+titleText, width))
+				lines = append(lines, "", titleLine)
+				if preview.Reason != "" {
+					reasonText := wrap(compat.SanitizeMetadata(preview.Reason), width-4)
+					for _, reasonLine := range strings.Split(reasonText, "\n") {
+						lines = append(lines, activeActionSubStyle.Render(padRight("  "+reasonLine, width)))
+					}
+				}
+			} else {
+				titleLine := normalActionSubStyle.Render(selector + titleText)
+				lines = append(lines, "", titleLine)
+				if preview.Reason != "" {
+					reasonText := wrap(compat.SanitizeMetadata(preview.Reason), width-4)
+					for _, reasonLine := range strings.Split(reasonText, "\n") {
+						lines = append(lines, normalActionSubStyle.Render("  "+reasonLine))
+					}
+				}
+			}
+			continue
+		}
+		titleText := compat.SanitizeMetadata(preview.Title)
+		if preview.Dangerous {
+			titleText += " — removes skills"
+		} else if preview.Mutates {
+			titleText += " — changes skills"
+		}
+		if i == m.action {
+			// Selected Action Highlight Block (entire block has same purple background)
+			titleLine := activeActionTitleStyle.Render(padRight(selector+titleText, width))
+			lines = append(lines, "", titleLine)
+
+			cmdText := truncate(compat.SanitizeMetadata(preview.Command), width-4)
+			cmdLine := activeActionSubStyle.Render(padRight("  "+cmdText, width))
+			lines = append(lines, cmdLine)
+
+		} else {
+			// Unselected Action (normal colors, subordinate metadata very dim)
+			titleLine := normalActionTitleStyle.Render(selector + titleText)
+			lines = append(lines, "", titleLine)
+
+			cmdText := truncate(compat.SanitizeMetadata(preview.Command), width-4)
+			cmdLine := normalActionSubStyle.Render("  " + cmdText)
+			lines = append(lines, cmdLine)
+		}
+	}
+	return lines
+}
+
+func padRight(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+func (m appModel) renderActionResult(width int) []string {
+	if m.actionResult == nil {
+		return nil
+	}
+	result := m.actionResult
+	status := successStyle.Render("success")
+	if result.ExitCode != 0 || result.Err != "" {
+		status = errorStyle.Render("failed")
+	}
+	lines := []string{fmt.Sprintf("  Result: %s (exit %d)", status, result.ExitCode)}
+	if result.Err != "" {
+		lines = append(lines, indent(wrap(compat.SanitizeMetadata(result.Err), width-2), "  "))
+	}
+	if result.Stdout != "" {
+		lines = append(lines, "  stdout:", fitLines(indent(wrapText(result.Stdout, width-4), "    "), 8))
+	}
+	if result.Stderr != "" {
+		lines = append(lines, "  stderr:", fitLines(indent(wrapText(result.Stderr, width-4), "    "), 8))
+	}
+	if result.Truncated {
+		lines = append(lines, dimStyle.Render("  output truncated"))
+	}
+	return lines
+}
+
+func (m appModel) footerText(width int) string {
+	var text string
+	if m.running {
+		text = "Working…"
+	} else if m.confirming {
+		text = "type y/yes/phrase · enter confirm · esc cancel"
+	} else if m.searching {
+		text = "type search · enter apply · esc cancel · backspace edit"
+	} else if m.detailModal {
+		text = "↑/↓ scroll · o edit · c commands · esc/q close"
+	} else if m.commands {
+		text = "↑/↓ choose · enter run · esc close"
+	} else if m.helpOpen {
+		text = "esc/q/? close help"
+	} else if m.focus == focusMetadata {
+		text = "↑/↓ scroll metadata · enter open · c commands · o edit · ? help"
+	} else if m.focus == focusPreview {
+		text = "↑/↓ scroll preview · enter open · c commands · o edit · ? help"
+	} else {
+		// focusSkills
+		rows := m.visibleRows()
+		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
+			row := rows[m.selected]
+			if row.isHeader {
+				text = "enter details · c source actions · h/- collapse · l/+ expand · d discover · ? help"
+			} else if row.isAvailable {
+				text = "enter preview · c install actions · ? help"
+			} else {
+				text = "enter open · c skill actions · o edit · u update · x remove · ? help"
+			}
+		} else {
+			text = "enter open · c skill actions · o edit · u update · x remove · ? help"
+		}
+	}
+	return dimStyle.Render(truncate(text, width))
+}
+
+func (m appModel) helpModalOverlay(layout appLayout) string {
+	modalWidth := 74
+	if layout.Width < modalWidth+4 {
+		modalWidth = layout.Width - 4
+	}
+	if modalWidth < 20 {
+		modalWidth = 20
+	}
+
+	sections := []string{
+		titleStyle.Render(" LazySkills Keyboard Help "),
+		"",
+		sectionHeaderStyle.Render("Navigation & Focus:"),
+		"  ↑/↓, j/k        Move selection (Inventory focus) or scroll (Metadata/Preview)",
+		"  1 / 2 / 3       Focus Inventory (1), Metadata (2), or Preview (3) pane",
+		"  tab / shift-tab Cycle focus forward / backward through panes",
+		"  ← / →           Move focus backward / forward outside Inventory; jump groups in Inventory",
+		"  h / l           Collapse / expand current source group in Inventory",
+		"  [ / ]           Jump to previous / next source group in Inventory",
+		"",
+		sectionHeaderStyle.Render("Filters:"),
+		"  P / G           Filter Project-only / Global-only scope",
+		"  f / F           Cycle scope filter / Clear scope filter (All)",
+		"  a / A           Cycle agent filter / Clear agent filter",
+		"  /               Initiate text search",
+		"",
+		sectionHeaderStyle.Render("Actions & Selection:"),
+		"  enter           Open detail modal for the selected source or skill",
+		"  space           Mark / unmark selected skill for bulk actions",
+		"  s               Mark all skills in the current source group",
+		"  o               Open selected skill directly in editor",
+		"  c               Open command picker menu",
+		"  u / x           Quick reinstall-update / remove for selection",
+		"  d               Check local or remote source for available skills (Source row)",
+		"  r               Refresh scan snapshot",
+		"",
+		sectionHeaderStyle.Render("Safety & Modals:"),
+		"  esc             Cancel action confirmation, search, picker, or modals",
+		"  q               Close help modal, detail modal, or quit the app",
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(actionBorderColor).
+		Padding(1, 2).
+		Width(modalWidth).
+		Render(strings.Join(sections, "\n"))
+
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
+func (m appModel) detailModalOverlay(layout appLayout) string {
+	modalWidth := 80
+	if layout.Width < modalWidth+4 {
+		modalWidth = layout.Width - 4
+	}
+	if modalWidth < 20 {
+		modalWidth = 20
+	}
+	modalHeight := 24
+	if layout.Height < modalHeight+4 {
+		modalHeight = layout.Height - 4
+	}
+	if modalHeight < 7 {
+		modalHeight = 7
+	}
+
+	m.viewport.Width = modalWidth - 4
+	m.viewport.Height = modalHeight - 6
+	m.viewport.SetContent(m.detailText(modalWidth - 4))
+
+	helpLine := dimStyle.Render(m.detailModalHelpLine())
+
+	content := []string{
+		titleStyle.Render(m.detailModalTitle()),
+		"",
+		m.viewport.View(),
+		"",
+		helpLine,
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(actionBorderColor).
+		Padding(1, 2).
+		Width(modalWidth).
+		Height(modalHeight).
+		Render(strings.Join(content, "\n"))
+
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
+func (m appModel) detailModalTitle() string {
+	if m.modalSource != "" {
+		return "Source Detail View"
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return "Detail View"
+	}
+	row := rows[m.selected]
+	if row.isHeader {
+		return "Source Detail View"
+	}
+	if row.isAvailable {
+		return "Available Skill Detail View"
+	}
+	return "Skill Detail View"
+}
+
+func (m appModel) detailModalHelpLine() string {
+	if m.modalSource != "" {
+		return "esc/q close · ↑/↓ select skill · c actions · o/u/x installed actions"
+	}
+	rows := m.visibleRows()
+	if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) && rows[m.selected].isAvailable {
+		return "esc/q close · c install actions · ↑/↓ scroll"
+	}
+	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
+}
+
+func (m *appModel) ensureSourceModalSelectionVisible() {
+	if m.modalSource == "" {
+		return
+	}
+	// The source modal renders source metadata before the child list. Keep a
+	// little context above the selected child rather than treating modalSelected
+	// as a raw viewport line number.
+	selectedLine := 8 + m.modalSelected
+	if selectedLine < 0 {
+		selectedLine = 0
+	}
+	height := m.viewport.Height
+	if height <= 0 {
+		// View() computes the final modal viewport height. Use the same rough
+		// default here so keyboard movement updates the offset before render.
+		height = 18
+	}
+	if selectedLine < m.viewport.YOffset+3 {
+		offset := selectedLine - 3
+		if offset < 0 {
+			offset = 0
+		}
+		m.viewport.SetYOffset(offset)
+		return
+	}
+	bottom := m.viewport.YOffset + height - 4
+	if selectedLine > bottom {
+		offset := selectedLine - height + 4
+		if offset < 0 {
+			offset = 0
+		}
+		m.viewport.SetYOffset(offset)
+	}
+}
+
+func (m appModel) confirmationOverlay(layout appLayout) string {
+	actions := m.currentActions()
+	title := "Confirm action"
+	phrase := ""
+	command := ""
+	if len(actions) > 0 && m.action < len(actions) {
+		action := actions[m.action]
+		title = compat.SanitizeMetadata(action.Title)
+		phrase = compat.SanitizeMetadata(action.ConfirmValue)
+		command = compat.SanitizeMetadata(action.Command)
+	}
+	lines := []string{
+		errorStyle.Bold(true).Render("Confirm Action"),
+		"",
+		sectionHeaderStyle.Render("Action:"),
+		wrapText(title, 48),
+		"",
+		sectionHeaderStyle.Render("Command:"),
+		dimStyle.Render(wrapText(command, 48)),
+		"",
+	}
+	if phrase == "yes" || phrase == "y" {
+		lines = append(lines, "Type 'y' or 'yes' and press Enter to confirm.")
+	} else if phrase != "" {
+		lines = append(lines, "Type 'y', 'yes', or '"+phrase+"' and press Enter to confirm.")
+	} else {
+		lines = append(lines, "Type 'y' or 'yes' and press Enter to confirm.")
+	}
+	lines = append(lines, "Press Esc to cancel.")
+
+	if m.confirmError != "" {
+		lines = append(lines, "", errorStyle.Render(m.confirmError))
+	}
+	input := compat.SanitizeMetadata(m.confirmInput)
+	if input == "" {
+		placeholder := "y / yes"
+		if phrase != "yes" && phrase != "y" && phrase != "" {
+			placeholder = fmt.Sprintf("y / yes / %s", phrase)
+		}
+		input = dimStyle.Render(placeholder)
+	}
+	lines = append(lines, "", "> "+input+"_")
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(actionBorderColor).Padding(1, 2).Width(52).Render(strings.Join(lines, "\n"))
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}
+
+func (m appModel) runningOverlay(layout appLayout) string {
+	title := compat.SanitizeMetadata(compat.FirstNonEmpty(m.runningTitle, "Running action"))
+	lines := []string{
+		runningStyle.Render("Running"),
+		wrapText(title, 44),
+		"",
+		"Working…",
+		dimStyle.Render("Press q or Ctrl+C to quit LazySkills."),
+	}
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(actionBorderColor).Padding(1, 2).Width(52).Render(strings.Join(lines, "\n"))
+	return fitToScreen(lipgloss.Place(layout.Width, layout.Height, lipgloss.Center, lipgloss.Center, box), layout.Width, layout.Height)
+}

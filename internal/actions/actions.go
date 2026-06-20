@@ -89,10 +89,7 @@ func AppLevelActionsWithResolver(resolve SkillsResolver) []CommandPreview {
 	initArgs := append([]string{}, baseArgs...)
 	initArgs = append(initArgs, "init")
 	initPreview := newPreview("skills_init", "Initialize skills in project", program, initArgs, "Initialize local skills configuration.", true, true, false, "yes")
-	if !available {
-		initPreview.Available = false
-		initPreview.Reason = reason
-	}
+	gateAvailability(&initPreview, available, reason)
 	previews = append(previews, initPreview)
 
 	// skills find
@@ -111,10 +108,7 @@ func AppLevelActionsWithResolver(resolve SkillsResolver) []CommandPreview {
 	updateArgs := append([]string{}, baseArgs...)
 	updateArgs = append(updateArgs, "update")
 	updatePreview := newPreview("skills_update", "Update project-local skills", program, updateArgs, "Check for and install updates for project-local skills.", true, true, false, "yes")
-	if !available {
-		updatePreview.Available = false
-		updatePreview.Reason = reason
-	}
+	gateAvailability(&updatePreview, available, reason)
 	previews = append(previews, updatePreview)
 
 	return previews
@@ -164,10 +158,7 @@ func ForAvailableSkillWithResolver(source, name string, resolve SkillsResolver) 
 	args = append(args, "add", source, "--skill", name, "--yes")
 
 	preview := newPreview("install_skill", "Install selected skill", program, args, "Install this skill to project.", true, true, false, "yes")
-	if !available {
-		preview.Available = false
-		preview.Reason = reason
-	}
+	gateAvailability(&preview, available, reason)
 	return []CommandPreview{preview}
 }
 
@@ -194,10 +185,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 			args = append(args, "-g")
 		}
 		preview := newPreview("reinstall_update", "Reinstall/update selected skill", program, args, "Refresh this skill from its source.", true, true, false, "yes")
-		if !available {
-			preview.Available = false
-			preview.Reason = reason
-		}
+		gateAvailability(&preview, available, reason)
 		previews = append(previews, preview)
 	} else {
 		previews = append(previews, unavailablePreview("Reinstall/update selected skill", reasonAdd))
@@ -211,10 +199,7 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 			args = append(args, "-g")
 		}
 		preview := newPreview("remove", "Remove selected skill", program, args, "Delete this installed skill.", true, true, true, target)
-		if !available {
-			preview.Available = false
-			preview.Reason = reason
-		}
+		gateAvailability(&preview, available, reason)
 		previews = append(previews, preview)
 	} else {
 		previews = append(previews, unavailablePreview("Remove selected skill", reasonRemove))
@@ -236,7 +221,7 @@ func openEditorAction(sk *model.Skill) (CommandPreview, bool, string) {
 			return CommandPreview{}, false, "$EDITOR arguments are unsafe"
 		}
 	}
-	target := firstRawNonEmpty(sk.SkillPath, sk.CanonicalPath)
+	target := compat.FirstNonEmpty(sk.SkillPath, sk.CanonicalPath)
 	if target == "" {
 		return CommandPreview{}, false, "skill path is unavailable"
 	}
@@ -303,7 +288,16 @@ func newBatchPreview(id, title string, batch []ExecSpec, description, confirmVal
 }
 
 func unavailablePreview(title, reason string) CommandPreview {
-	return CommandPreview{Title: title, Available: false, Reason: compat.SanitizeMetadata(firstNonEmpty(reason, "not enough safe identity data to build this command"))}
+	return CommandPreview{Title: title, Available: false, Reason: compat.SanitizeMetadata(compat.FirstNonEmpty(reason, "not enough safe identity data to build this command"))}
+}
+
+// gateAvailability marks a preview unavailable with the given reason when the
+// underlying tooling is missing. Already-unavailable previews are left untouched.
+func gateAvailability(p *CommandPreview, available bool, reason string) {
+	if !available {
+		p.Available = false
+		p.Reason = reason
+	}
 }
 
 func addIdentity(sk *model.Skill) (source string, skillFilter string, ok bool, reason string) {
@@ -347,9 +341,9 @@ func sourceRefPath(sk *model.Skill) (source, ref, skillPath string) {
 
 func globalUpdateSource(entry model.GlobalLockEntry) string {
 	if entry.SkillPath == "" {
-		return firstRawNonEmpty(entry.SourceURL, entry.Source)
+		return compat.FirstNonEmpty(entry.SourceURL, entry.Source)
 	}
-	return firstRawNonEmpty(entry.Source, entry.SourceURL)
+	return compat.FirstNonEmpty(entry.Source, entry.SourceURL)
 }
 
 func buildInstallSource(source, ref, skillPath string) string {
@@ -410,11 +404,6 @@ func candidateInstallPaths(sk *model.Skill) []string {
 	return paths
 }
 
-func safeCLIValue(value string) bool {
-	value = compat.SanitizeMetadata(value)
-	return value != "" && !strings.HasPrefix(value, "-")
-}
-
 func safeExecValue(value string) bool {
 	if value == "" {
 		return false
@@ -428,14 +417,6 @@ func safeEditorToken(value string) bool {
 
 func safeEditorArg(value string) bool {
 	return safeExecValue(value) && !strings.ContainsAny(value, "'\"$`\\!*?[]{}()&;<>|")
-}
-
-func safeToken(value string) string {
-	value = compat.SanitizeMetadata(value)
-	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, " \t\n'\"$`\\!*?[]{}()&;<>|") {
-		return ""
-	}
-	return value
 }
 
 func renderCommand(program string, args []string) string {
@@ -455,22 +436,4 @@ func shellQuote(value string) string {
 		return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 	}
 	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return compat.SanitizeMetadata(value)
-		}
-	}
-	return ""
-}
-
-func firstRawNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

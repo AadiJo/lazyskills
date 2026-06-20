@@ -65,7 +65,10 @@ func TestAgentFilterLimitsVisibleSkills(t *testing.T) {
 }
 
 func TestListTitleReflectsAgentFilter(t *testing.T) {
-	m := appModel{width: 100, height: 20, result: model.ScanResult{Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}}}}
+	m := appModel{width: 100, height: 20, result: model.ScanResult{
+		Agents: []model.AgentState{{Name: "opencode", Display: "OpenCode"}},
+		Skills: []*model.Skill{{Name: "Build", Scope: model.ScopeProject}},
+	}}
 	if title := m.listTitle(); !strings.Contains(title, "1 Inventory") {
 		t.Fatalf("expected all-skills title, got %q", title)
 	}
@@ -142,9 +145,12 @@ func TestAgentClearedOnRefreshIfNoLongerDetected(t *testing.T) {
 }
 
 func TestAgentFilterCanSelectSupportedAgentWithNoSkills(t *testing.T) {
-	m := appModel{width: 100, height: 30, agent: "claude-code", result: model.ScanResult{Skills: []*model.Skill{
-		{Name: "OpenCode Skill", Description: "desc", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}}},
-	}}}
+	m := appModel{width: 100, height: 30, agent: "claude-code", result: model.ScanResult{
+		Agents: []model.AgentState{{Name: "claude-code", Display: "Claude Code"}},
+		Skills: []*model.Skill{
+			{Name: "OpenCode Skill", Description: "desc", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Agent: "opencode"}}},
+		},
+	}}
 	items := m.filteredSkills()
 	if len(items) != 0 {
 		t.Fatalf("expected no skills for claude-code, got %#v", items)

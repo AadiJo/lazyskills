@@ -54,6 +54,16 @@ func SanitizePreviewContent(str string) string {
 	return StripTerminalEscapes(str)
 }
 
+// FirstNonEmpty returns the first value that is not the empty string, or "" if none are set.
+func FirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 type LocalLockDisplay struct {
 	Source     string `json:"source,omitempty"`
 	Ref        string `json:"ref,omitempty"`

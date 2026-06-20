@@ -395,18 +395,6 @@ func addDuplicateAndShadowingIssues(skills map[string]*model.Skill) {
 	}
 }
 
-type Scanner struct {
-	Cwd string
-}
-
-func New(cwd string) Scanner {
-	return Scanner{Cwd: cwd}
-}
-
-func (s Scanner) Snapshot() (model.ScanResult, error) {
-	return Run(s.Cwd)
-}
-
 func Snapshot(cwd string) (model.ScanResult, error) {
-	return New(cwd).Snapshot()
+	return Run(cwd)
 }

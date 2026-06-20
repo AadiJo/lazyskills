@@ -1,0 +1,520 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/alvinunreal/lazyskills/internal/actions"
+	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/model"
+)
+
+func (m *appModel) syncViewport() {
+	layout := newAppLayout(m.width, m.height)
+	if layout.Small {
+		m.viewport.Width = 0
+
+		m.viewport.Height = 0
+		m.viewport.SetContent("")
+		m.viewport.SetYOffset(0)
+
+		m.metadataViewport.Width = 0
+		m.metadataViewport.Height = 0
+		m.metadataViewport.SetContent("")
+		m.metadataViewport.SetYOffset(0)
+
+		m.previewViewport.Width = 0
+		m.previewViewport.Height = 0
+		m.previewViewport.SetContent("")
+		m.previewViewport.SetYOffset(0)
+		return
+	}
+	if m.detailModal || m.commands {
+		modalWidth := 80
+		if layout.Width < modalWidth+4 {
+			modalWidth = layout.Width - 4
+		}
+		if modalWidth < 20 {
+			modalWidth = 20
+		}
+		modalHeight := 24
+		if layout.Height < modalHeight+4 {
+			modalHeight = layout.Height - 4
+		}
+		if modalHeight < 7 {
+			modalHeight = 7
+		}
+		m.viewport.Width = modalWidth - 4
+		m.viewport.Height = modalHeight - 6
+		m.viewport.SetContent(m.detailText(modalWidth - 4))
+	} else {
+		_, rightWidth, topHeight, bottomHeight := m.getThreePaneLayout()
+
+		// For metadata viewport:
+		m.metadataViewport.Width = max(1, rightWidth-4)
+		m.metadataViewport.Height = max(1, topHeight-2)
+		m.metadataViewport.SetContent(strings.Join(m.metadataLines(rightWidth-4), "\n"))
+
+		// For preview viewport:
+		m.previewViewport.Width = max(1, rightWidth-4)
+		m.previewViewport.Height = max(1, bottomHeight-2)
+		m.previewViewport.SetContent(strings.Join(m.previewLines(rightWidth-4), "\n"))
+	}
+	m.clampViewportOffset()
+}
+
+type skillsRow struct {
+	isHeader        bool
+	isAvailable     bool
+	groupName       string
+	skill           *model.Skill
+	discoveredSkill *DiscoveredSkill
+	skillIndex      int
+}
+
+func (m appModel) visibleRows() []skillsRow {
+	items := m.filteredSkills()
+	var rows []skillsRow
+	previousGroup := ""
+	for i, skill := range items {
+		group := listGroupLabel(skill)
+		if group != previousGroup {
+			if previousGroup != "" && !m.isCollapsed(previousGroup) {
+				rows = append(rows, m.getAvailableRowsForGroup(previousGroup)...)
+			}
+			rows = append(rows, skillsRow{
+				isHeader:   true,
+				groupName:  group,
+				skillIndex: -1,
+			})
+			previousGroup = group
+		}
+		if m.isCollapsed(group) {
+			continue
+		}
+		rows = append(rows, skillsRow{
+			isHeader:   false,
+			groupName:  group,
+			skill:      skill,
+			skillIndex: i,
+		})
+	}
+	if previousGroup != "" && !m.isCollapsed(previousGroup) {
+		rows = append(rows, m.getAvailableRowsForGroup(previousGroup)...)
+	}
+	return rows
+}
+
+func (m appModel) getAvailableRowsForGroup(groupName string) []skillsRow {
+	var rows []skillsRow
+	disc, ok := m.discovery[groupName]
+	if !ok || disc.Status != DiscoveryReady {
+		return nil
+	}
+	for i, ds := range disc.Skills {
+		if !m.isSkillInstalled(ds.Name, groupName) {
+			rows = append(rows, skillsRow{
+				isHeader:        false,
+				isAvailable:     true,
+				groupName:       groupName,
+				discoveredSkill: &disc.Skills[i],
+				skillIndex:      -1,
+			})
+		}
+	}
+	return rows
+}
+
+func (m appModel) getGroupCounts(group string) (visible int, total int) {
+	items := m.filteredSkills()
+	for _, skill := range items {
+		if listGroupLabel(skill) == group {
+			total++
+			if !m.isCollapsed(group) {
+				visible++
+			}
+		}
+	}
+	return
+}
+
+func (m *appModel) collapseGroup(group string) {
+	if m.collapsedGroups == nil {
+		m.collapsedGroups = make(map[string]bool)
+	}
+	m.collapsedGroups[group] = true
+
+	rows := m.visibleRows()
+	for idx, r := range rows {
+		if r.isHeader && r.groupName == group {
+			m.selected = idx
+			break
+		}
+	}
+	m.clampSelection()
+}
+
+func (m *appModel) expandGroup(group string) {
+	if m.collapsedGroups == nil {
+		m.collapsedGroups = make(map[string]bool)
+	}
+	delete(m.collapsedGroups, group)
+
+	rows := m.visibleRows()
+	for idx, r := range rows {
+		if r.isHeader && r.groupName == group {
+			m.selected = idx
+			break
+		}
+	}
+	m.clampSelection()
+}
+
+func (m *appModel) clampSelection() {
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		m.selected = 0
+		return
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= len(rows) {
+		m.selected = len(rows) - 1
+	}
+}
+
+func (m appModel) isCollapsed(group string) bool {
+	if m.collapsedGroups == nil {
+		return false
+	}
+	return m.collapsedGroups[group]
+}
+
+func (m *appModel) toggleSelectedSkill() {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return
+	}
+	row := rows[m.selected]
+	if row.isHeader || row.skill == nil {
+		return
+	}
+	if m.selectedKeys == nil {
+		m.selectedKeys = map[string]bool{}
+	}
+	key := skillKey(row.skill)
+	if m.selectedKeys[key] {
+		delete(m.selectedKeys, key)
+	} else {
+		m.selectedKeys[key] = true
+	}
+	if len(m.selectedKeys) == 0 {
+		m.selectedKeys = nil
+	}
+}
+
+func (m *appModel) selectCurrentSourceGroup() {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return
+	}
+	row := rows[m.selected]
+	group := row.groupName
+	if group == "" {
+		return
+	}
+	if m.selectedKeys == nil {
+		m.selectedKeys = map[string]bool{}
+	}
+	changed := false
+	items := m.filteredSkills()
+	for _, skill := range items {
+		if listGroupLabel(skill) == group {
+			m.selectedKeys[skillKey(skill)] = true
+			changed = true
+		}
+	}
+	if !changed && len(m.selectedKeys) == 0 {
+		m.selectedKeys = nil
+	}
+}
+
+func (m *appModel) jumpSourceGroup(direction int) {
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		return
+	}
+	m.clampSelection()
+
+	var headerIndices []int
+	for idx, r := range rows {
+		if r.isHeader {
+			headerIndices = append(headerIndices, idx)
+		}
+	}
+	if len(headerIndices) <= 1 {
+		if len(headerIndices) == 1 {
+			m.selected = headerIndices[0]
+		}
+		return
+	}
+
+	currentHeaderIdx := 0
+	for i, idx := range headerIndices {
+		if idx <= m.selected {
+			currentHeaderIdx = i
+		}
+	}
+
+	if direction > 0 {
+		currentHeaderIdx = (currentHeaderIdx + 1) % len(headerIndices)
+	} else {
+		currentHeaderIdx = (currentHeaderIdx + len(headerIndices) - 1) % len(headerIndices)
+	}
+
+	m.selected = headerIndices[currentHeaderIdx]
+	m.actionResult = nil
+	m.viewport.GotoTop()
+}
+
+func (m appModel) isSelected(skill *model.Skill) bool {
+	return len(m.selectedKeys) > 0 && m.selectedKeys[skillKey(skill)]
+}
+
+func (m appModel) selectedCount() int {
+	return len(m.selectedKeys)
+}
+
+func (m appModel) selectedSkills() []*model.Skill {
+	if len(m.selectedKeys) == 0 {
+		return nil
+	}
+	selected := make([]*model.Skill, 0, len(m.selectedKeys))
+	for _, skill := range m.result.Skills {
+		if m.isSelected(skill) {
+			selected = append(selected, skill)
+		}
+	}
+	return selected
+}
+
+func (m appModel) sourceGroupSkills(group string) []*model.Skill {
+	var out []*model.Skill
+	for _, skill := range m.filteredSkills() {
+		if listGroupLabel(skill) == group {
+			out = append(out, skill)
+		}
+	}
+	return out
+}
+
+func (m appModel) sourceActions(group string) []actions.CommandPreview {
+	skills := m.sourceGroupSkills(group)
+	previews := actions.ForSkills(skills)
+	for i := range previews {
+		switch previews[i].ID {
+		case "bulk_reinstall_update":
+			previews[i].Title = "Update installed skills from source"
+			previews[i].Description = "Refresh installed skills from this source."
+		case "bulk_remove":
+			previews[i].Title = "Remove installed skills from source"
+			previews[i].Description = "Remove installed skills from this source."
+			previews[i].ConfirmValue = group
+		}
+	}
+
+	discoverable, reason := m.isSourceDiscoverable(group)
+
+	_, _, isRemote := parseRemoteGitHubSource(group)
+	title := "Check local source for available skills"
+	desc := "Scan the local source root for uninstalled skills."
+	if isRemote {
+		title = "Check remote source for available skills"
+		desc = "Clone and scan the remote repository for available skills."
+	}
+	discPreview := actions.CommandPreview{
+		ID:              "source_discover",
+		Title:           title,
+		Description:     desc,
+		Command:         fmt.Sprintf("discover %s", group),
+		Exec:            actions.ExecSpec{Internal: "discover", Args: []string{group}},
+		RequiresConfirm: false,
+		Available:       discoverable,
+		Reason:          reason,
+		ConfirmValue:    group, // Reused to pass group name
+	}
+	previews = append(previews, discPreview)
+
+	return previews
+}
+
+func skillKey(skill *model.Skill) string {
+	if skill == nil {
+		return ""
+	}
+	return strings.Join([]string{string(skill.Scope), skill.Name, skill.CanonicalPath, skill.SkillPath}, "\x00")
+}
+
+func (m appModel) currentSelectedKey() string {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return ""
+	}
+	row := rows[m.selected]
+	if row.isHeader {
+		return "group:" + row.groupName
+	}
+	return "skill:" + skillKey(row.skill)
+}
+
+func (m *appModel) restoreSelection(selectedKey string, fallback int) {
+	rows := m.visibleRows()
+	if selectedKey != "" {
+		for i, r := range rows {
+			key := ""
+			if r.isHeader {
+				key = "group:" + r.groupName
+			} else {
+				key = "skill:" + skillKey(r.skill)
+			}
+			if key == selectedKey {
+				m.selected = i
+				return
+			}
+		}
+	}
+	m.selected = fallback
+	m.clampSelection()
+}
+
+func sourceGroupLabel(skill *model.Skill) string {
+	info := sourceInfo(skill)
+	if info.Source == "" {
+		return ""
+	}
+	return info.Source
+}
+
+func listGroupLabel(skill *model.Skill) string {
+	if label := sourceGroupLabel(skill); label != "" {
+		return label
+	}
+	return "Custom / untracked"
+}
+
+type skillSourceInfo struct {
+	Source string
+	Folder string
+	Ref    string
+}
+
+func sourceInfo(skill *model.Skill) skillSourceInfo {
+	if skill == nil {
+		return skillSourceInfo{}
+	}
+	if skill.Scope == model.ScopeProject && skill.LocalLock != nil {
+		return localSourceInfo(skill.LocalLock)
+	}
+	if skill.Scope == model.ScopeGlobal && skill.GlobalLock != nil {
+		return globalSourceInfo(skill.GlobalLock)
+	}
+	if skill.LocalLock != nil {
+		return localSourceInfo(skill.LocalLock)
+	}
+	if skill.GlobalLock != nil {
+		return globalSourceInfo(skill.GlobalLock)
+	}
+	return skillSourceInfo{}
+}
+
+func localSourceInfo(lock *model.LocalLockEntry) skillSourceInfo {
+	if lock == nil {
+		return skillSourceInfo{}
+	}
+	return skillSourceInfo{Source: compat.SanitizeMetadata(lock.Source), Folder: skillFolder(lock.SkillPath), Ref: compat.SanitizeMetadata(lock.Ref)}
+}
+
+func globalSourceInfo(lock *model.GlobalLockEntry) skillSourceInfo {
+	if lock == nil {
+		return skillSourceInfo{}
+	}
+	source := lock.Source
+	if source == "" {
+		source = lock.SourceURL
+	}
+	return skillSourceInfo{Source: compat.SanitizeMetadata(source), Folder: skillFolder(lock.SkillPath), Ref: compat.SanitizeMetadata(lock.Ref)}
+}
+
+func skillFolder(skillPath string) string {
+	folder := compat.SanitizeMetadata(skillPath)
+	folder = strings.TrimSuffix(folder, "/SKILL.md")
+	folder = strings.TrimSuffix(folder, "SKILL.md")
+	return strings.Trim(folder, "/")
+}
+
+func sourceDetailLines(skill *model.Skill, width int) []string {
+	info := sourceInfo(skill)
+	if info.Source == "" {
+		return nil
+	}
+	lines := []string{formatMetaLine("Source:", info.Source, width)}
+	if info.Folder != "" {
+		lines = append(lines, formatMetaLine("Folder:", info.Folder, width))
+	}
+	if info.Ref != "" {
+		lines = append(lines, formatMetaLine("Ref:", info.Ref, width))
+	}
+	if skill.LocalLock != nil && skill.LocalLock.ComputedHash != "" {
+		lines = append(lines, formatMetaLine("Hash:", skill.LocalLock.ComputedHash, width))
+	} else if skill.GlobalLock != nil && skill.GlobalLock.SkillFolderHash != "" {
+		lines = append(lines, formatMetaLine("Hash:", skill.GlobalLock.SkillFolderHash, width))
+	}
+	lines = append(lines, "", dimStyle.Render("Note: Live update status is not checked here."))
+	lines = append(lines, dimStyle.Render("Use update actions ('u' or 'c' menu) to check for updates."))
+	return lines
+}
+
+func (m *appModel) pruneSelected() {
+	if len(m.selectedKeys) == 0 {
+		return
+	}
+	valid := map[string]bool{}
+	for _, skill := range m.result.Skills {
+		valid[skillKey(skill)] = true
+	}
+	for key := range m.selectedKeys {
+		if !valid[key] {
+			delete(m.selectedKeys, key)
+		}
+	}
+	if len(m.selectedKeys) == 0 {
+		m.selectedKeys = nil
+	}
+}
+
+func (m appModel) getThreePaneLayout() (listWidth, rightWidth, topHeight, bottomHeight int) {
+	width := viewWidth(m.width)
+	height := viewHeight(m.height) - 1 // Deduct 1 for persistent footer
+	listWidth = width * 4 / 10
+	if listWidth < 25 {
+		listWidth = 25
+	}
+	if listWidth > width-30 {
+		listWidth = width - 30
+	}
+	if listWidth < 10 {
+		listWidth = 10
+	}
+	rightWidth = width - listWidth
+
+	topHeight = height * 4 / 10
+	if topHeight < 5 {
+		topHeight = 5
+	}
+	if topHeight > height-5 {
+		topHeight = height - 5
+	}
+	bottomHeight = height - topHeight
+	return
+}

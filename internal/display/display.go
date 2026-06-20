@@ -99,22 +99,13 @@ func Skill(sk *model.Skill) SkillView {
 func LockSummary(view SkillView) string {
 	parts := []string{}
 	if view.LocalLock != nil {
-		parts = append(parts, fmt.Sprintf("project: %s", firstNonEmpty(view.LocalLock.Source, view.LocalLock.SkillPath, "tracked")))
+		parts = append(parts, fmt.Sprintf("project: %s", compat.FirstNonEmpty(view.LocalLock.Source, view.LocalLock.SkillPath, "tracked")))
 	}
 	if view.GlobalLock != nil {
-		parts = append(parts, fmt.Sprintf("global: %s", firstNonEmpty(view.GlobalLock.Source, view.GlobalLock.SourceURL, view.GlobalLock.SkillPath, "tracked")))
+		parts = append(parts, fmt.Sprintf("global: %s", compat.FirstNonEmpty(view.GlobalLock.Source, view.GlobalLock.SourceURL, view.GlobalLock.SkillPath, "tracked")))
 	}
 	if len(parts) == 0 {
 		return "not tracked"
 	}
 	return strings.Join(parts, " | ")
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

@@ -31,19 +31,6 @@ func withHome(t *testing.T) string {
 	return home
 }
 
-func findSkill(t *testing.T, skills any, name string) map[string]any {
-	t.Helper()
-	list := skills.([]any)
-	for _, item := range list {
-		m := item.(map[string]any)
-		if m["name"] == name {
-			return m
-		}
-	}
-	t.Fatalf("skill %q not found", name)
-	return nil
-}
-
 func TestUniversalProjectVisibilityForUniversalAgents(t *testing.T) {
 	withHome(t)
 	cwd := t.TempDir()
@@ -342,15 +329,6 @@ func TestSnapshotBoundary(t *testing.T) {
 	}
 	if len(res.Skills) != 1 || res.Skills[0].Name != "Build" {
 		t.Fatalf("unexpected snapshot result: %#v", res.Skills)
-	}
-
-	scanner := New(cwd)
-	res, err = scanner.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Skills) != 1 || res.Skills[0].Name != "Build" {
-		t.Fatalf("unexpected scanner snapshot result: %#v", res.Skills)
 	}
 }
 

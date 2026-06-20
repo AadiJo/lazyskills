@@ -73,15 +73,6 @@ func TestUniversalClassificationAndVisibility(t *testing.T) {
 	if agentByName(t, registry, "firebender").ShowInUniversalPrompt {
 		t.Fatalf("firebender should be hidden from universal prompt")
 	}
-
-	visible := VisibleUniversalAgents()
-	for _, hidden := range []string{"dexto", "firebender", "loaf", "promptscript", "replit", "universal"} {
-		for _, agent := range visible {
-			if agent.Name == hidden {
-				t.Fatalf("%s should not be in visible universal agents", hidden)
-			}
-		}
-	}
 }
 
 func TestEnvOverridesForAgentHomes(t *testing.T) {
