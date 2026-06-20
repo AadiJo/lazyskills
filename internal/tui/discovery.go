@@ -247,7 +247,7 @@ func (m appModel) isSourceDiscoverable(group string) (bool, string) {
 	return true, ""
 }
 
-func (m appModel) startDiscovery(groupName string) (tea.Model, tea.Cmd) {
+func (m appModel) startDiscovery(groupName string, force bool) (tea.Model, tea.Cmd) {
 	if m.discovery == nil {
 		m.discovery = make(map[string]SourceDiscovery)
 	}
@@ -294,25 +294,18 @@ func (m appModel) startDiscovery(groupName string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	cleanRef := compat.SanitizeMetadata(ref)
 	return m, func() tea.Msg {
-		tempDir, err := os.MkdirTemp("", "lazyskills-discover-*")
+		dir, cleanup, err := cachedSourceClone(url, cleanRef, force)
 		if err != nil {
-			return discoveryResultMsg{
-				groupName: groupName,
-				err:       fmt.Errorf("failed to create temporary directory: %w", err),
-			}
-		}
-		defer os.RemoveAll(tempDir)
-
-		cleanRef := compat.SanitizeMetadata(ref)
-		if err := gitClone(url, cleanRef, tempDir); err != nil {
 			return discoveryResultMsg{
 				groupName: groupName,
 				err:       errors.New(compat.SanitizeMetadata(err.Error())),
 			}
 		}
+		defer cleanup()
 
-		skills, err := discoverSourceSkills(tempDir)
+		skills, err := discoverSourceSkills(dir)
 		for i := range skills {
 			skills[i].Source = compat.SanitizeMetadata(groupName)
 		}
@@ -322,6 +315,70 @@ func (m appModel) startDiscovery(groupName string) (tea.Model, tea.Cmd) {
 			err:       err,
 		}
 	}
+}
+
+// discoveryCacheRoot is the directory where remote source clones are cached
+// between scans and across sessions. Overridable in tests.
+var discoveryCacheRoot = func() (string, error) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "lazyskills", "clones"), nil
+}
+
+// cloneCacheKey derives a filesystem-safe cache directory name from a GitHub
+// URL and ref. owner/repo/ref are already validated to safe charsets before
+// reaching here, so only the path separator needs flattening.
+func cloneCacheKey(url, ref string) string {
+	key := strings.TrimPrefix(url, "https://github.com/")
+	key = strings.ReplaceAll(key, "/", "-")
+	if ref != "" {
+		key += "@" + strings.ReplaceAll(ref, "/", "-")
+	}
+	return key
+}
+
+func isGitRepo(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && st.IsDir()
+}
+
+// cachedSourceClone returns a directory holding a shallow clone of the remote
+// source. A cached clone is reused unless force is set; on a cache miss (or
+// force) it clones fresh. The returned cleanup removes throwaway directories
+// only — a cached clone is kept. If no cache directory is available it falls
+// back to a temp clone that cleanup deletes.
+func cachedSourceClone(url, ref string, force bool) (dir string, cleanup func(), err error) {
+	noop := func() {}
+
+	root, rootErr := discoveryCacheRoot()
+	if rootErr != nil {
+		tmp, tmpErr := os.MkdirTemp("", "lazyskills-discover-*")
+		if tmpErr != nil {
+			return "", noop, fmt.Errorf("failed to create temporary directory: %w", tmpErr)
+		}
+		if cloneErr := gitClone(url, ref, tmp); cloneErr != nil {
+			os.RemoveAll(tmp)
+			return "", noop, cloneErr
+		}
+		return tmp, func() { os.RemoveAll(tmp) }, nil
+	}
+
+	dir = filepath.Join(root, cloneCacheKey(url, ref))
+	if !force && isGitRepo(dir) {
+		return dir, noop, nil
+	}
+
+	os.RemoveAll(dir)
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		return "", noop, mkErr
+	}
+	if cloneErr := gitClone(url, ref, dir); cloneErr != nil {
+		os.RemoveAll(dir)
+		return "", noop, cloneErr
+	}
+	return dir, noop, nil
 }
 
 func parseRemoteGitHubSource(source string) (url string, ref string, ok bool) {

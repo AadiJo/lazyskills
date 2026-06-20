@@ -770,6 +770,55 @@ func TestScopeFilterKeys(t *testing.T) {
 	}
 }
 
+func TestMain(m *testing.M) {
+	// Redirect the discovery clone cache to a throwaway dir so tests never
+	// touch the real user cache directory.
+	dir, err := os.MkdirTemp("", "lazyskills-test-clones-*")
+	if err != nil {
+		panic(err)
+	}
+	discoveryCacheRoot = func() (string, error) { return dir, nil }
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+func TestCachedSourceCloneReuse(t *testing.T) {
+	oldRoot := discoveryCacheRoot
+	oldClone := gitClone
+	defer func() { discoveryCacheRoot = oldRoot; gitClone = oldClone }()
+
+	tmp := t.TempDir()
+	discoveryCacheRoot = func() (string, error) { return tmp, nil }
+
+	clones := 0
+	gitClone = func(url, ref, dir string) error {
+		clones++
+		return os.MkdirAll(filepath.Join(dir, ".git"), 0o755) // simulate a real clone
+	}
+
+	if _, _, err := cachedSourceClone("https://github.com/owner/repo", "main", false); err != nil {
+		t.Fatalf("first clone failed: %v", err)
+	}
+	if clones != 1 {
+		t.Fatalf("expected 1 clone on cache miss, got %d", clones)
+	}
+	// Cache hit: a cached repo is reused without cloning.
+	if _, _, err := cachedSourceClone("https://github.com/owner/repo", "main", false); err != nil {
+		t.Fatalf("reuse failed: %v", err)
+	}
+	if clones != 1 {
+		t.Fatalf("expected cache reuse (no extra clone), got %d clones", clones)
+	}
+	// Force re-clones.
+	if _, _, err := cachedSourceClone("https://github.com/owner/repo", "main", true); err != nil {
+		t.Fatalf("forced clone failed: %v", err)
+	}
+	if clones != 2 {
+		t.Fatalf("expected force to re-clone, got %d clones", clones)
+	}
+}
+
 func TestHumanizeSince(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -1645,7 +1694,7 @@ func TestRemoteDiscoverySuccess(t *testing.T) {
 	}
 	m.syncViewport()
 
-	updated, cmd := m.startDiscovery("owner/repo")
+	updated, cmd := m.startDiscovery("owner/repo", false)
 	if cmd == nil {
 		t.Fatal("expected discovery cmd")
 	}
@@ -1694,7 +1743,7 @@ func TestRemoteDiscoveryFailure(t *testing.T) {
 			},
 		},
 	}
-	updated, cmd := m.startDiscovery("owner/repo")
+	updated, cmd := m.startDiscovery("owner/repo", false)
 	if cmd == nil {
 		t.Fatal("expected discovery cmd")
 	}
@@ -1788,7 +1837,7 @@ func TestRemoteDiscoverySanitization(t *testing.T) {
 	}
 	m.syncViewport()
 
-	updated, cmd := m.startDiscovery("owner/repo")
+	updated, cmd := m.startDiscovery("owner/repo", false)
 	if cmd == nil {
 		t.Fatal("expected discovery cmd")
 	}
@@ -1827,7 +1876,7 @@ func TestRemoteDiscoveryUnsafeRef(t *testing.T) {
 		},
 	}
 	// Verify that starting discovery on an unsafe ref fails immediately with a clear message
-	updated, cmd := m.startDiscovery("owner/repo#--unsafe-ref")
+	updated, cmd := m.startDiscovery("owner/repo#--unsafe-ref", false)
 	if cmd != nil {
 		t.Fatal("expected discovery cmd to be nil for unsafe ref")
 	}
@@ -1864,7 +1913,7 @@ func TestRemoteDiscoveryUnsafeFallbackRef(t *testing.T) {
 		},
 	}
 	// Trigger discovery on "owner/repo" which has an unsafe fallback ref
-	updated, cmd := m.startDiscovery("owner/repo")
+	updated, cmd := m.startDiscovery("owner/repo", false)
 	if cmd != nil {
 		t.Fatal("expected discovery cmd to be nil for unsafe fallback ref")
 	}
@@ -1936,7 +1985,7 @@ func TestRemoteDiscoveryRawFallbackRefBypass(t *testing.T) {
 			},
 		},
 	}
-	updated1, cmd1 := m1.startDiscovery("owner/repo")
+	updated1, cmd1 := m1.startDiscovery("owner/repo", false)
 	if cmd1 != nil {
 		t.Fatal("expected discovery cmd to be nil for unsafe fallback ref containing escape char")
 	}
@@ -1962,7 +2011,7 @@ func TestRemoteDiscoveryRawFallbackRefBypass(t *testing.T) {
 			},
 		},
 	}
-	updated2, cmd2 := m2.startDiscovery("owner/repo")
+	updated2, cmd2 := m2.startDiscovery("owner/repo", false)
 	if cmd2 != nil {
 		t.Fatal("expected discovery cmd to be nil for unsafe fallback ref containing newline")
 	}

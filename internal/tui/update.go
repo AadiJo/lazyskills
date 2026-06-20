@@ -156,7 +156,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "d":
 				if m.modalSource != "" {
-					modelTmp, cmd := m.startDiscovery(m.modalSource)
+					modelTmp, cmd := m.startDiscovery(m.modalSource, true)
 					m = modelTmp.(appModel)
 					m.syncViewport()
 					return m, cmd
@@ -370,7 +370,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !exists || (disc.Status != DiscoveryLoading && disc.Status != DiscoveryReady && disc.Status != DiscoveryFailed) {
 						var cmd tea.Cmd
 						var modelTmp tea.Model
-						modelTmp, cmd = m.startDiscovery(groupName)
+						modelTmp, cmd = m.startDiscovery(groupName, false)
 						m = modelTmp.(appModel)
 						m.viewport.GotoTop()
 						m.syncViewport()
@@ -406,7 +406,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
 					row := rows[m.selected]
 					if row.isHeader {
-						return m.startDiscovery(row.groupName)
+						return m.startDiscovery(row.groupName, true)
 					}
 				}
 			}
@@ -748,7 +748,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 	if action.ID == "source_discover" {
 		m.commands = false
 		m.actionResult = nil
-		return m.startDiscovery(action.ConfirmValue)
+		return m.startDiscovery(action.ConfirmValue, true)
 	}
 	if action.Exec.Internal == "refresh" {
 		m.actionResult = nil
