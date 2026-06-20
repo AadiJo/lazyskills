@@ -184,6 +184,37 @@ func (m *appModel) clampSelection() {
 	}
 }
 
+// jumpListTop / jumpListBottom move to the start/end of whichever pane has
+// focus: the inventory selection, or the metadata/preview scroll position.
+// clampSelection (called after key handling) fixes the empty-list case.
+func (m *appModel) jumpListTop() {
+	switch m.focus {
+	case focusMetadata:
+		m.metadataViewport.GotoTop()
+	case focusPreview:
+		m.previewViewport.GotoTop()
+	default:
+		m.selected = 0
+		m.actionResult = nil
+		m.metadataViewport.GotoTop()
+		m.previewViewport.GotoTop()
+	}
+}
+
+func (m *appModel) jumpListBottom() {
+	switch m.focus {
+	case focusMetadata:
+		m.metadataViewport.GotoBottom()
+	case focusPreview:
+		m.previewViewport.GotoBottom()
+	default:
+		m.selected = len(m.visibleRows()) - 1
+		m.actionResult = nil
+		m.metadataViewport.GotoTop()
+		m.previewViewport.GotoTop()
+	}
+}
+
 func (m appModel) isCollapsed(group string) bool {
 	if m.collapsedGroups == nil {
 		return false

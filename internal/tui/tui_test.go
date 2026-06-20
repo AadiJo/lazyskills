@@ -769,19 +769,42 @@ func TestScopeFilterKeys(t *testing.T) {
 	if next.filter != scopeAll {
 		t.Fatalf("expected F to reset scope to All, got %d", next.filter)
 	}
+}
 
-	// Test 'P' sets Project-only
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
-	next = updated.(appModel)
-	if next.filter != scopeProject {
-		t.Fatalf("expected P to set project scope, got %d", next.filter)
+func TestTopBottomJumpKeys(t *testing.T) {
+	m := appModel{width: 120, height: 32, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject},
+		{Name: "Two", Scope: model.ScopeProject},
+		{Name: "Three", Scope: model.ScopeProject},
+	}}}
+	last := len(m.visibleRows()) - 1
+
+	// 'G' jumps to the bottom.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	next := updated.(appModel)
+	if next.selected != last {
+		t.Fatalf("expected G to select last row %d, got %d", last, next.selected)
 	}
 
-	// Test 'G' sets Global-only
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	next = updated.(appModel)
-	if next.filter != scopeGlobal {
-		t.Fatalf("expected G to set global scope, got %d", next.filter)
+	// A lone 'g' arms but does not move selection.
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	armed := updated.(appModel)
+	if armed.selected != last || !armed.pendingG {
+		t.Fatalf("expected lone g to arm without moving, got selected=%d pendingG=%v", armed.selected, armed.pendingG)
+	}
+
+	// The second 'g' jumps to the top and disarms.
+	updated, _ = armed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	top := updated.(appModel)
+	if top.selected != 0 || top.pendingG {
+		t.Fatalf("expected gg to select first row and disarm, got selected=%d pendingG=%v", top.selected, top.pendingG)
+	}
+
+	// A non-g key disarms a pending g.
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	updated, _ = updated.(appModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if updated.(appModel).pendingG {
+		t.Fatal("expected a non-g key to disarm pendingG")
 	}
 }
 

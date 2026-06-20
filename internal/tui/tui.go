@@ -80,6 +80,7 @@ type appModel struct {
 	discovery        map[string]SourceDiscovery
 	modalSelected    int
 	modalSource      string
+	pendingG         bool // saw a lone "g"; a second "g" jumps to top
 }
 
 type paneLayout struct {

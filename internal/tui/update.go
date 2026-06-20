@@ -277,6 +277,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// "gg" jumps to top: a lone g arms the flag, any other key disarms it.
+		gPending := m.pendingG
+		m.pendingG = false
+
 		switch key {
 		case "esc":
 			if m.selectedCount() > 0 {
@@ -405,16 +409,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "3":
 			m.focus = focusPreview
 			m.detailsFocused = true
-		case "P":
-			m.filter = scopeProject
-			m.selected = 0
-			m.actionResult = nil
-			m.viewport.GotoTop()
-		case "G":
-			m.filter = scopeGlobal
-			m.selected = 0
-			m.actionResult = nil
-			m.viewport.GotoTop()
 		case "f":
 			m.filter = (m.filter + 1) % 3
 			m.selected = 0
@@ -511,13 +505,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		case "home":
-			if m.focus == focusMetadata {
-				m.metadataViewport.GotoTop()
-			} else if m.focus == focusPreview {
-				m.previewViewport.GotoTop()
+			m.jumpListTop()
+		case "end":
+			m.jumpListBottom()
+		case "g":
+			if gPending {
+				m.jumpListTop()
 			} else {
-				m.previewViewport.GotoTop()
+				m.pendingG = true
 			}
+		case "G":
+			m.jumpListBottom()
 		}
 		m.clampSelection()
 		m.clampAction()
