@@ -113,8 +113,13 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	warningStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	runExec       = runner.OSRunner{}.Run
-	gitClone      = defaultGitClone
+
+	// Scope tags: project=cyan, global=magenta.
+	scopeProjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
+	scopeGlobalStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
+
+	runExec  = runner.OSRunner{}.Run
+	gitClone = defaultGitClone
 
 	// Action Mode UI Polish Styles
 	actionTitleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)

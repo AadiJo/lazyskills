@@ -282,7 +282,7 @@ func TestListRendersIssueRowsWithSeverityBadges(t *testing.T) {
 		{Name: "Error", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Severity: "error", Message: "missing SKILL.md"}}},
 	}}}
 	out := m.listPane(20, 80)
-	if !strings.Contains(out, "Warning [P] ⚠ 1") {
+	if !strings.Contains(out, "Warning [P] ▲1") {
 		t.Fatalf("expected warning issue badge, got %q", out)
 	}
 	if !strings.Contains(out, "Error [P] !1") {

@@ -78,6 +78,17 @@ func scopeBadge(scope string) string {
 	}
 }
 
+func scopeStyle(scope string) lipgloss.Style {
+	switch scope {
+	case string(model.ScopeProject):
+		return scopeProjectStyle
+	case string(model.ScopeGlobal):
+		return scopeGlobalStyle
+	default:
+		return dimStyle
+	}
+}
+
 func (m appModel) listTitle() string {
 	title := "1 Inventory"
 	if m.agent != "" {
@@ -183,34 +194,38 @@ func (m appModel) listPane(height, width int) string {
 			if m.isSelected(row.skill) {
 				mark = "● "
 			}
-			coreLabel := fmt.Sprintf("%s%s [%s]", mark, view.Name, scopeBadge(view.Scope))
+
+			scopeTag := "[" + scopeBadge(view.Scope) + "]"
+			agentBadge := ""
 			if m.agent != "" {
-				coreLabel += " " + agentVisibilityBadge(row.skill, m.agent)
+				agentBadge = " " + agentVisibilityBadge(row.skill, m.agent)
 			}
+
 			issueErrors, issueWarnings := healthIssueCounts(view.HealthIssues)
-			badgeLen := 0
+			severity := ""
 			if issueErrors > 0 {
-				badgeLen = len(fmt.Sprintf(" !%d", issueErrors))
+				severity = fmt.Sprintf(" !%d", issueErrors)
 			} else if issueWarnings > 0 {
-				badgeLen = len(fmt.Sprintf(" ⚠ %d", issueWarnings))
+				severity = fmt.Sprintf(" ▲%d", issueWarnings)
 			}
-			truncatedCore := truncate(coreLabel, width-badgeLen)
-			if idx == selectedRow {
-				badge := ""
-				if issueErrors > 0 {
-					badge = fmt.Sprintf(" !%d", issueErrors)
-				} else if issueWarnings > 0 {
-					badge = fmt.Sprintf(" ⚠ %d", issueWarnings)
+
+			// Reserve room for the trailing tags so a long name truncates first,
+			// keeping scope/agent/severity badges visible. lipgloss.Width counts
+			// display columns (not bytes), so width-1 glyphs like ▲ need no
+			// spacing crutch (the old ⚠ badge padded with a space to render).
+			tail := " " + scopeTag + agentBadge + severity
+			nameCore := truncate(mark+view.Name, max(1, width-lipgloss.Width(tail)))
+
+			switch {
+			case idx == selectedRow:
+				line = selectedStyle.Render(nameCore + tail)
+			case issueErrors > 0:
+				line = errorStyle.Render(nameCore + tail)
+			default:
+				line = nameCore + " " + scopeStyle(view.Scope).Render(scopeTag) + agentBadge
+				if issueWarnings > 0 {
+					line += warningStyle.Render(severity)
 				}
-				line = selectedStyle.Render(truncatedCore + badge)
-			} else if issueErrors > 0 {
-				badge := errorStyle.Render(fmt.Sprintf(" !%d", issueErrors))
-				line = errorStyle.Render(truncatedCore) + badge
-			} else if issueWarnings > 0 {
-				badge := warningStyle.Render(fmt.Sprintf(" ⚠ %d", issueWarnings))
-				line = truncatedCore + badge
-			} else {
-				line = truncatedCore
 			}
 		}
 		renderedRows = append(renderedRows, line)
