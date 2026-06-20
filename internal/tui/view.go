@@ -1165,7 +1165,7 @@ func (m appModel) detailModalTitle() string {
 
 func (m appModel) detailModalHelpLine() string {
 	if m.modalSource != "" {
-		return "esc/q close · ↑/↓ select skill · d scan · c actions · o/u/x installed actions"
+		return "esc/q close · ↑/↓ select · enter/c actions · d scan · o/u/x installed"
 	}
 	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
 }

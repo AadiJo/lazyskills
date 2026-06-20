@@ -116,7 +116,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.startSkillActionByID(child.skill, "remove")
 					}
 				}
-			case "c":
+			case "c", "enter":
+				// Act on the selected child: open the action picker (install for
+				// an available skill, open/update/remove for an installed one).
 				m.detailModal = false
 				m.commands = true
 				m.action = 0

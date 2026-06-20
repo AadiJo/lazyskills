@@ -29,10 +29,9 @@ const (
 type DiscoveryStatus string
 
 const (
-	DiscoveryNotChecked DiscoveryStatus = "not_checked"
-	DiscoveryLoading    DiscoveryStatus = "loading"
-	DiscoveryReady      DiscoveryStatus = "ready"
-	DiscoveryFailed     DiscoveryStatus = "failed"
+	DiscoveryLoading DiscoveryStatus = "loading"
+	DiscoveryReady   DiscoveryStatus = "ready"
+	DiscoveryFailed  DiscoveryStatus = "failed"
 )
 
 type DiscoveredSkill struct {
