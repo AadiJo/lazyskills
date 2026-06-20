@@ -1284,6 +1284,15 @@ func TestMarkdownPreviewStripsFrontmatter(t *testing.T) {
 	}
 }
 
+func TestMetadataShowsSkillDescription(t *testing.T) {
+	m := actionTestModel(t.TempDir())
+	lines := m.metadataLines(80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Description:") || !strings.Contains(joined, "desc") {
+		t.Fatalf("expected skill description in metadata, got %q", joined)
+	}
+}
+
 func TestDetailScrollKeysMoveViewport(t *testing.T) {
 	preview := strings.Repeat("- line\n", 80)
 	m := appModel{width: 100, height: 20, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{Name: "Long", Description: "desc", Scope: model.ScopeProject, Preview: preview}}}}

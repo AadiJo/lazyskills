@@ -520,11 +520,11 @@ func (m appModel) getThreePaneLayout() (listWidth, rightWidth, topHeight, bottom
 	}
 	rightWidth = width - listWidth
 
-	// Metadata is a compact, scrollable info pane now, so cap its height and
-	// hand the surplus to the skill preview below it.
-	topHeight = height * 3 / 10
-	if topHeight > 12 {
-		topHeight = 12
+	// Metadata carries source, description, visibility, and health details, so
+	// give it a little more room while keeping preview as the larger pane.
+	topHeight = height * 4 / 10
+	if topHeight > 16 {
+		topHeight = 16
 	}
 	if topHeight < 5 {
 		topHeight = 5

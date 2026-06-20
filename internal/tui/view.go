@@ -465,6 +465,9 @@ func (m appModel) metadataLines(width int) []string {
 	lines := []string{
 		formatMetaLine("Scope:", styledScopeBadge(string(view.Scope)), width),
 	}
+	if view.Description != "" {
+		lines = append(lines, formatMetaLine("Description:", dimStyle.Render(view.Description), width))
+	}
 	if sourceLines := sourceDetailLines(row.skill, width); len(sourceLines) > 0 {
 		lines = append(lines, sourceLines...)
 	} else {
