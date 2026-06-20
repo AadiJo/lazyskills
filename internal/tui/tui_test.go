@@ -819,6 +819,36 @@ func TestCachedSourceCloneReuse(t *testing.T) {
 	}
 }
 
+func TestExecutePruneLockRemovesEntry(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "skills-lock.json")
+	if err := os.WriteFile(lockPath, []byte(`{"version":1,"skills":{"ghost":{"source":"o/r"},"keep":{"source":"o/r"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := appModel{cwd: dir, width: 120, height: 32}
+	action := actions.CommandPreview{
+		ID:           "prune_lock",
+		ConfirmValue: "ghost",
+		Exec:         actions.ExecSpec{Internal: "prune_project_lock"},
+	}
+	_, cmd := m.executeAction(action)
+	if cmd == nil {
+		t.Fatal("expected a rescan command after pruning")
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "ghost") {
+		t.Fatalf("expected 'ghost' entry pruned, got %s", data)
+	}
+	if !strings.Contains(string(data), "keep") {
+		t.Fatalf("expected 'keep' entry preserved, got %s", data)
+	}
+}
+
 func TestHumanizeSince(t *testing.T) {
 	now := time.Now()
 	cases := []struct {

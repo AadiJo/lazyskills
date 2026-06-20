@@ -2,6 +2,7 @@ package locks
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -48,4 +49,33 @@ func ReadGlobal(path string) (model.GlobalLockFile, error) {
 		return model.GlobalLockFile{Version: 3, Skills: map[string]model.GlobalLockEntry{}}, err
 	}
 	return lock, nil
+}
+
+// RemoveEntry deletes a single skill entry by key from a lock file, preserving
+// all other entries and every top-level field, then rewrites it as indented
+// JSON. It errors if the file, its skills map, or the key is missing. Decoding
+// into a generic map (rather than the typed structs) avoids dropping fields the
+// official CLI may add that this tool does not model.
+func RemoveEntry(path, key string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var root map[string]any
+	if err := json.Unmarshal(b, &root); err != nil {
+		return err
+	}
+	skills, ok := root["skills"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("lock file %s has no skills map", path)
+	}
+	if _, exists := skills[key]; !exists {
+		return fmt.Errorf("lock entry %q not found", key)
+	}
+	delete(skills, key)
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }

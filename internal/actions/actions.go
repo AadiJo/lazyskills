@@ -204,7 +204,42 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 	} else {
 		previews = append(previews, unavailablePreview("Remove selected skill", reasonRemove))
 	}
+	if hasOrphanedLock(sk) {
+		previews = append(previews, pruneLockPreview(sk))
+	}
 	return previews
+}
+
+// hasOrphanedLock reports whether the skill is a lock entry whose files are
+// gone from disk (the scan flags this as lock_without_files).
+func hasOrphanedLock(sk *model.Skill) bool {
+	for _, issue := range sk.HealthIssues {
+		if issue.Type == "lock_without_files" {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneLockPreview builds the internal action that removes an orphaned entry
+// from the project or global lock file. It is handled inside the TUI, which
+// owns the lock paths and triggers a rescan afterwards.
+func pruneLockPreview(sk *model.Skill) CommandPreview {
+	internal := "prune_project_lock"
+	if sk.Scope == model.ScopeGlobal {
+		internal = "prune_global_lock"
+	}
+	return CommandPreview{
+		ID:              "prune_lock",
+		Title:           "Prune stale lock entry",
+		Description:     "Remove this orphaned entry from the lock file (its skill files are already gone).",
+		Command:         "prune lock entry " + compat.SanitizeMetadata(sk.Name),
+		Exec:            ExecSpec{Internal: internal},
+		Mutates:         true,
+		RequiresConfirm: true,
+		ConfirmValue:    sk.Name,
+		Available:       true,
+	}
 }
 
 func openEditorAction(sk *model.Skill) (CommandPreview, bool, string) {

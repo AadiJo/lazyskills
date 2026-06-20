@@ -10,6 +10,7 @@ import (
 
 	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/compat"
+	"github.com/alvinunreal/lazyskills/internal/locks"
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/runner"
 )
@@ -749,6 +750,29 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.commands = false
 		m.actionResult = nil
 		return m.startDiscovery(action.ConfirmValue, true)
+	}
+	if action.Exec.Internal == "prune_project_lock" || action.Exec.Internal == "prune_global_lock" {
+		m.commands = false
+		m.confirming = false
+		m.confirmInput = ""
+		m.confirmError = ""
+		path := locks.ProjectLockPath(m.cwd)
+		if action.Exec.Internal == "prune_global_lock" {
+			path = locks.GlobalLockPath()
+		}
+		if err := locks.RemoveEntry(path, action.ConfirmValue); err != nil {
+			m.actionResult = &runner.Result{
+				Program:  "prune-lock",
+				Args:     []string{action.ConfirmValue},
+				ExitCode: -1,
+				Err:      compat.SanitizeMetadata(err.Error()),
+			}
+			m.syncViewport()
+			return m, nil
+		}
+		// Success: rescan drops the now-pruned phantom from the list.
+		m.actionResult = nil
+		return m, loadSnapshot(m.cwd)
 	}
 	if action.Exec.Internal == "refresh" {
 		m.actionResult = nil

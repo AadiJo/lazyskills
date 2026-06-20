@@ -14,6 +14,35 @@ func init() {
 	}
 }
 
+func TestForSkillPruneLockAction(t *testing.T) {
+	orphaned := &model.Skill{
+		Name:         "ghost",
+		Scope:        model.ScopeProject,
+		LocalLock:    &model.LocalLockEntry{Source: "owner/repo"},
+		HealthIssues: []model.HealthIssue{{Type: "lock_without_files", Severity: "warning"}},
+	}
+	previews := ForSkill(orphaned)
+	var prune *CommandPreview
+	for i := range previews {
+		if previews[i].ID == "prune_lock" {
+			prune = &previews[i]
+		}
+	}
+	if prune == nil {
+		t.Fatal("expected a prune_lock action for an orphaned-lock skill")
+	}
+	if !prune.Available || prune.ConfirmValue != "ghost" || prune.Exec.Internal != "prune_project_lock" {
+		t.Fatalf("unexpected prune preview: %+v", *prune)
+	}
+
+	healthy := &model.Skill{Name: "ok", Scope: model.ScopeProject, CanonicalPath: "/tmp/ok", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}}
+	for _, a := range ForSkill(healthy) {
+		if a.ID == "prune_lock" {
+			t.Fatal("did not expect a prune_lock action for a healthy skill")
+		}
+	}
+}
+
 func TestForSkillBuildsStructuredSanitizedCommandPreviews(t *testing.T) {
 	t.Setenv("EDITOR", "")
 	sk := &model.Skill{
