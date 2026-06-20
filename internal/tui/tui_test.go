@@ -1542,13 +1542,16 @@ func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
 		t.Errorf("hash should no longer appear in metadata, got %q", metaJoined)
 	}
 
-	// 2. Assert source preview shows a compact summary (full browser is the modal)
+	// 2. Assert source preview lists installed skills + available section
 	prevLines := m.previewLines(80)
 	prevJoined := strings.Join(prevLines, "\n")
-	if !strings.Contains(prevJoined, "Installed: 2") {
-		t.Errorf("expected installed count in preview, got %q", prevJoined)
+	if !strings.Contains(prevJoined, "Installed (2)") {
+		t.Errorf("expected installed count header in preview, got %q", prevJoined)
 	}
-	if !strings.Contains(prevJoined, "Available: press d to scan.") {
+	if !strings.Contains(prevJoined, "• One [P]") || !strings.Contains(prevJoined, "• Two [G]") {
+		t.Errorf("expected installed skills listed in preview, got %q", prevJoined)
+	}
+	if !strings.Contains(prevJoined, "press d to scan this source") {
 		t.Errorf("expected available scan hint in preview, got %q", prevJoined)
 	}
 	if !strings.Contains(prevJoined, "enter to browse · d to scan") {

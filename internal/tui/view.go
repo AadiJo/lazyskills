@@ -528,27 +528,49 @@ func (m appModel) previewLines(width int) []string {
 
 	row := rows[m.selected]
 	if row.isHeader {
-		// Read-only source summary; the interactive installed/available
-		// browser lives in the source detail modal (enter).
+		// Read-only glance: list installed + available skills. The modal
+		// (enter) is the interactive browse/install surface.
 		skills := m.sourceGroupSkills(row.groupName)
-		lines := []string{fmt.Sprintf("Installed: %d", len(skills))}
+		lines := []string{sectionHeaderStyle.Render(fmt.Sprintf("Installed (%d)", len(skills)))}
+		if len(skills) == 0 {
+			lines = append(lines, dimStyle.Render("  none"))
+		} else {
+			for _, sk := range skills {
+				badge := "[P]"
+				if sk.Scope == model.ScopeGlobal {
+					badge = "[G]"
+				}
+				lines = append(lines, fmt.Sprintf("  • %s %s", sk.Name, badge))
+			}
+		}
+
+		lines = append(lines, "")
 
 		disc, discOk := m.discovery[row.groupName]
 		_, _, isRemote := parseRemoteGitHubSource(row.groupName)
 		switch {
 		case !discOk:
-			lines = append(lines, dimStyle.Render("Available: press d to scan."))
+			lines = append(lines, sectionHeaderStyle.Render("Available"), dimStyle.Render("  press d to scan this source"))
 		case disc.Status == DiscoveryLoading && isRemote:
-			lines = append(lines, dimStyle.Render("Available: cloning & scanning…"))
+			lines = append(lines, sectionHeaderStyle.Render("Available"), dimStyle.Render("  cloning & scanning…"))
 		case disc.Status == DiscoveryLoading:
-			lines = append(lines, dimStyle.Render("Available: scanning…"))
+			lines = append(lines, sectionHeaderStyle.Render("Available"), dimStyle.Render("  scanning…"))
 		case disc.Status == DiscoveryFailed:
-			lines = append(lines, errorStyle.Render("Couldn't scan: "+disc.Error))
+			lines = append(lines, sectionHeaderStyle.Render("Available"), errorStyle.Render("  couldn't scan: "+disc.Error))
 		default: // DiscoveryReady
-			if n := m.availableCount(row.groupName); n > 0 {
-				lines = append(lines, fmt.Sprintf("Available: %d", n))
+			var avail []string
+			for _, ds := range disc.Skills {
+				if !m.isSkillInstalled(ds.Name, row.groupName) {
+					avail = append(avail, ds.Name)
+				}
+			}
+			lines = append(lines, sectionHeaderStyle.Render(fmt.Sprintf("Available (%d)", len(avail))))
+			if len(avail) == 0 {
+				lines = append(lines, dimStyle.Render("  all installed"))
 			} else {
-				lines = append(lines, dimStyle.Render("Available: all installed."))
+				for _, name := range avail {
+					lines = append(lines, fmt.Sprintf("  + %s", name))
+				}
 			}
 		}
 
