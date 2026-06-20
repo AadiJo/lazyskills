@@ -452,10 +452,8 @@ func TestActionExecUsesProjectCwdAndPreventsDuplicateWhileRunning(t *testing.T) 
 
 func TestSpaceMarksSkillsAndEscClearsSelection(t *testing.T) {
 	m := bulkActionTestModel(t.TempDir())
-	fmt.Printf("BEFORE: selected=%d visibleRows=%+v\n", m.selected, m.visibleRows())
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(appModel)
-	fmt.Printf("AFTER: selected=%d visibleRows=%+v\n", m.selected, m.visibleRows())
 	if m.selectedCount() != 1 || !strings.Contains(m.View(), "● One") {
 		t.Fatalf("expected one marked skill, count=%d view=%q", m.selectedCount(), m.View())
 	}
@@ -682,8 +680,8 @@ func TestSkillListShowsSourceGroups(t *testing.T) {
 	if !strings.Contains(out, "owner/repo") {
 		t.Fatalf("expected source group header, got %q", out)
 	}
-	if strings.Count(out, "owner/repo") != 3 || strings.Contains(out, "owner/repo / skills/web") || strings.Contains(out, "owner/repo / skills/data") {
-		t.Fatalf("expected repo-level group header (one in list, two in details), got %q", out)
+	if strings.Count(out, "owner/repo") != 2 || strings.Contains(out, "owner/repo / skills/web") || strings.Contains(out, "owner/repo / skills/data") {
+		t.Fatalf("expected repo-level group header (one in list, one in Source detail), got %q", out)
 	}
 }
 
@@ -1246,16 +1244,19 @@ func TestVisibilityReasonTranslation(t *testing.T) {
 	}
 }
 
-func TestStaticUpdateAwarenessDisclaimers(t *testing.T) {
+func TestMetadataOmitsHashAndUpdateNotes(t *testing.T) {
 	m := appModel{width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
 		Name: "One", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo", ComputedHash: "abcdef123456"},
 	}}}}
 	out := m.View()
-	if !strings.Contains(out, "Hash:") || !strings.Contains(out, "abcdef123456") {
-		t.Fatalf("expected lock hash in metadata, got: %s", out)
+	if !strings.Contains(out, "Source:") || !strings.Contains(out, "owner/repo") {
+		t.Fatalf("expected source detail in metadata, got: %s", out)
 	}
-	if !strings.Contains(out, "Live update status is not checked here") {
-		t.Fatalf("expected live update status disclaimer, got: %s", out)
+	if strings.Contains(out, "Hash:") || strings.Contains(out, "abcdef123456") {
+		t.Fatalf("hash should no longer appear in metadata, got: %s", out)
+	}
+	if strings.Contains(out, "Live update status") || strings.Contains(out, "check for updates") {
+		t.Fatalf("update-status notes should no longer appear in metadata, got: %s", out)
 	}
 }
 
@@ -1481,7 +1482,7 @@ func TestCollapseExpandSourceGroups(t *testing.T) {
 	m.selected = 0 // select header row owner/one
 	m.collapsedGroups["owner/one"] = true
 	outHeader := m.View()
-	if !strings.Contains(outHeader, "State:       collapsed") || !strings.Contains(outHeader, "Note: Only installed skills are known locally.") {
+	if !strings.Contains(outHeader, "State:       collapsed") || !strings.Contains(outHeader, "Only installed skills are known until discovery (d).") {
 		t.Fatalf("expected header placeholder/metadata in Metadata pane, got:\n%s", outHeader)
 	}
 
@@ -1537,10 +1538,10 @@ func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
 	if !strings.Contains(metaJoined, "Scope:       mixed") {
 		t.Errorf("expected scope mixed in metadata, got %q", metaJoined)
 	}
-	if !strings.Contains(metaJoined, "Hash:        hash1") {
-		t.Errorf("expected lock hash in metadata, got %q", metaJoined)
+	if strings.Contains(metaJoined, "Hash:") {
+		t.Errorf("hash should no longer appear in metadata, got %q", metaJoined)
 	}
-	if !strings.Contains(metaJoined, "Note: Only installed skills are known locally.") {
+	if !strings.Contains(metaJoined, "Only installed skills are known until discovery (d).") {
 		t.Errorf("expected local knowledge disclaimer in metadata, got %q", metaJoined)
 	}
 

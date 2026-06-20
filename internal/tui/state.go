@@ -496,13 +496,6 @@ func sourceDetailLines(skill *model.Skill, width int) []string {
 	if info.Ref != "" {
 		lines = append(lines, formatMetaLine("Ref:", info.Ref, width))
 	}
-	if skill.LocalLock != nil && skill.LocalLock.ComputedHash != "" {
-		lines = append(lines, formatMetaLine("Hash:", skill.LocalLock.ComputedHash, width))
-	} else if skill.GlobalLock != nil && skill.GlobalLock.SkillFolderHash != "" {
-		lines = append(lines, formatMetaLine("Hash:", skill.GlobalLock.SkillFolderHash, width))
-	}
-	lines = append(lines, "", dimStyle.Render("Note: Live update status is not checked here."))
-	lines = append(lines, dimStyle.Render("Use update actions ('u' or 'c' menu) to check for updates."))
 	return lines
 }
 

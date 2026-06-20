@@ -363,7 +363,7 @@ func (m appModel) metadataLines(width int) []string {
 		}
 
 		skills := m.sourceGroupSkills(row.groupName)
-		var folders, refs, hashes []string
+		var folders, refs []string
 		var projectCount, globalCount int
 		var skillIssues []display.HealthIssueView
 
@@ -374,15 +374,6 @@ func (m appModel) metadataLines(width int) []string {
 			}
 			if info.Ref != "" {
 				refs = append(refs, info.Ref)
-			}
-			var h string
-			if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
-				h = sk.LocalLock.ComputedHash
-			} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
-				h = sk.GlobalLock.SkillFolderHash
-			}
-			if h != "" {
-				hashes = append(hashes, h)
 			}
 			if sk.Scope == model.ScopeProject {
 				projectCount++
@@ -417,9 +408,6 @@ func (m appModel) metadataLines(width int) []string {
 		if len(refs) > 0 {
 			lines = append(lines, formatMetaLine("Ref:", refs[0], width))
 		}
-		if len(hashes) > 0 {
-			lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
-		}
 
 		healthStr := "healthy"
 		if len(skillIssues) > 0 {
@@ -429,7 +417,7 @@ func (m appModel) metadataLines(width int) []string {
 
 		lines = append(lines,
 			"",
-			dimStyle.Render("Note: Only installed skills are known locally."),
+			dimStyle.Render("Only installed skills are known until discovery (d)."),
 		)
 
 		if len(skillIssues) > 0 {
@@ -466,10 +454,13 @@ func (m appModel) metadataLines(width int) []string {
 	view := display.Skill(row.skill)
 	lines := []string{
 		formatMetaLine("Scope:", string(view.Scope), width),
-		formatMetaLine("Lock:", display.LockSummary(view), width),
 	}
 	if sourceLines := sourceDetailLines(row.skill, width); len(sourceLines) > 0 {
 		lines = append(lines, sourceLines...)
+	} else {
+		// No source block to show; fall back to the lock/tracking state
+		// (covers "not tracked" and path-only locks).
+		lines = append(lines, formatMetaLine("Lock:", display.LockSummary(view), width))
 	}
 	if view.CanonicalPath != "" {
 		lines = append(lines, formatMetaLine("Canonical:", view.CanonicalPath, width))
@@ -699,7 +690,7 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 	}
 
 	skills := m.sourceGroupSkills(groupName)
-	var folders, refs, hashes []string
+	var folders, refs []string
 	var projectCount, globalCount int
 	var skillIssues []display.HealthIssueView
 
@@ -710,15 +701,6 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 		}
 		if info.Ref != "" {
 			refs = append(refs, info.Ref)
-		}
-		var h string
-		if sk.LocalLock != nil && sk.LocalLock.ComputedHash != "" {
-			h = sk.LocalLock.ComputedHash
-		} else if sk.GlobalLock != nil && sk.GlobalLock.SkillFolderHash != "" {
-			h = sk.GlobalLock.SkillFolderHash
-		}
-		if h != "" {
-			hashes = append(hashes, h)
 		}
 		if sk.Scope == model.ScopeProject {
 			projectCount++
@@ -751,9 +733,6 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 	}
 	if len(refs) > 0 {
 		lines = append(lines, formatMetaLine("Ref:", refs[0], width))
-	}
-	if len(hashes) > 0 {
-		lines = append(lines, formatMetaLine("Hash:", hashes[0], width))
 	}
 
 	healthStr := "healthy"
