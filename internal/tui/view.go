@@ -780,19 +780,24 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 
 	lines = append(lines, sectionHeaderStyle.Render("Available Skills:"))
 	disc, ok := m.discovery[groupName]
+	_, _, isRemote := parseRemoteGitHubSource(groupName)
 	if !ok {
 		discoverable, reason := m.isSourceDiscoverable(groupName)
 		if !discoverable {
-			lines = append(lines, errorStyle.Render("  Discovery unavailable: "+reason))
+			lines = append(lines, errorStyle.Render("  Couldn't scan: "+reason))
 		} else {
-			lines = append(lines, dimStyle.Render("  Discovery pending..."))
+			lines = append(lines, dimStyle.Render("  Press d to scan this source."))
 		}
 	} else {
 		switch disc.Status {
 		case DiscoveryLoading:
-			lines = append(lines, dimStyle.Render("  Scanning/cloning source..."))
+			if isRemote {
+				lines = append(lines, dimStyle.Render("  Cloning & scanning…"))
+			} else {
+				lines = append(lines, dimStyle.Render("  Scanning…"))
+			}
 		case DiscoveryFailed:
-			lines = append(lines, errorStyle.Render("  Discovery failed: "+disc.Error))
+			lines = append(lines, errorStyle.Render("  Couldn't scan: "+disc.Error))
 		case DiscoveryReady:
 			availableCount := 0
 			for idx, cr := range childRows {
@@ -807,7 +812,7 @@ func (m appModel) sourceModalDetailLines(width int) []string {
 				}
 			}
 			if availableCount == 0 {
-				lines = append(lines, "  All discovered skills from this source are installed.")
+				lines = append(lines, "  All skills from this source are installed.")
 			}
 		}
 	}

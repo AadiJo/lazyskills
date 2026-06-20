@@ -259,7 +259,7 @@ func (m appModel) startDiscovery(groupName string) (tea.Model, tea.Cmd) {
 	if !discoverable {
 		m.discovery[groupName] = SourceDiscovery{
 			Status: DiscoveryFailed,
-			Error:  "Discovery failed: " + reason + ".",
+			Error:  reason,
 		}
 		return m, nil
 	}

@@ -121,6 +121,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commands = true
 				m.action = 0
 				m.syncViewport()
+			case "d":
+				if m.modalSource != "" {
+					modelTmp, cmd := m.startDiscovery(m.modalSource)
+					m = modelTmp.(appModel)
+					m.syncViewport()
+					return m, cmd
+				}
 			case "down", "j":
 				if m.modalSource != "" {
 					childRows := m.modalChildRows(m.modalSource)
