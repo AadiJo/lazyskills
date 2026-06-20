@@ -174,19 +174,14 @@ func (m appModel) listPane(height, width int) string {
 				affordance = "+ "
 			}
 			headerText := affordance + row.groupName
-			if idx == selectedRow {
-				line = selectedStyle.Render(truncate(headerText, width))
-			} else {
-				line = dimStyle.Render(truncate(headerText, width))
+			hint := ""
+			if n := m.availableCount(row.groupName); n > 0 {
+				hint = fmt.Sprintf("  +%d available", n)
 			}
-		} else if row.isAvailable {
-			ds := row.discoveredSkill
-			coreLabel := fmt.Sprintf("  + %s [available]", ds.Name)
-			truncatedCore := truncate(coreLabel, width)
 			if idx == selectedRow {
-				line = selectedStyle.Render(truncatedCore)
+				line = selectedStyle.Render(truncate(headerText+hint, width))
 			} else {
-				line = dimStyle.Render(truncatedCore)
+				line = dimStyle.Render(truncate(headerText, width-lipgloss.Width(hint))) + dimStyle.Render(hint)
 			}
 		} else {
 			view := display.Skill(row.skill)
@@ -432,20 +427,6 @@ func (m appModel) metadataLines(width int) []string {
 		return lines
 	}
 
-	if row.isAvailable {
-		ds := row.discoveredSkill
-		lines := []string{
-			formatMetaLine("Skill:", ds.Name, width),
-			formatMetaLine("Status:", "available", width),
-			formatMetaLine("Source:", ds.Source, width),
-		}
-		if ds.SkillPath != "" {
-			lines = append(lines, formatMetaLine("Path:", ds.SkillPath, width))
-		}
-		lines = append(lines, "", wrapText(ds.Description, width))
-		return lines
-	}
-
 	view := display.Skill(row.skill)
 	lines := []string{
 		formatMetaLine("Scope:", string(view.Scope), width),
@@ -547,92 +528,36 @@ func (m appModel) previewLines(width int) []string {
 
 	row := rows[m.selected]
 	if row.isHeader {
-		disc, discOk := m.discovery[row.groupName]
-		lines := []string{
-			sectionHeaderStyle.Render("Installed Skills:"),
-		}
+		// Read-only source summary; the interactive installed/available
+		// browser lives in the source detail modal (enter).
 		skills := m.sourceGroupSkills(row.groupName)
-		if len(skills) == 0 {
-			lines = append(lines, "  No installed skills under this source.")
-		} else {
-			for _, sk := range skills {
-				scopeBadgeStr := "[P]"
-				if sk.Scope == model.ScopeGlobal {
-					scopeBadgeStr = "[G]"
-				}
-				lines = append(lines, fmt.Sprintf("  • %s %s", sk.Name, scopeBadgeStr))
-			}
-		}
+		lines := []string{fmt.Sprintf("Installed: %d", len(skills))}
 
-		lines = append(lines, "")
-
+		disc, discOk := m.discovery[row.groupName]
 		_, _, isRemote := parseRemoteGitHubSource(row.groupName)
-		statusHeader := sectionHeaderStyle.Render("Available Skills:")
-		if !discOk {
-			if isRemote {
-				lines = append(lines, statusHeader, "  Remote source discovery not run yet. Press 'd' to scan.")
+		switch {
+		case !discOk:
+			lines = append(lines, dimStyle.Render("Available: press d to scan."))
+		case disc.Status == DiscoveryLoading && isRemote:
+			lines = append(lines, dimStyle.Render("Available: cloning & scanning…"))
+		case disc.Status == DiscoveryLoading:
+			lines = append(lines, dimStyle.Render("Available: scanning…"))
+		case disc.Status == DiscoveryFailed:
+			lines = append(lines, errorStyle.Render("Couldn't scan: "+disc.Error))
+		default: // DiscoveryReady
+			if n := m.availableCount(row.groupName); n > 0 {
+				lines = append(lines, fmt.Sprintf("Available: %d", n))
 			} else {
-				lines = append(lines, statusHeader, "  Local source discovery not run yet. Press 'd' to scan.")
-			}
-		} else {
-			switch disc.Status {
-			case DiscoveryLoading:
-				if isRemote {
-					lines = append(lines, statusHeader, "  Cloning and scanning remote repository...")
-				} else {
-					lines = append(lines, statusHeader, "  Scanning local checkout...")
-				}
-			case DiscoveryFailed:
-				lines = append(lines, statusHeader, fmt.Sprintf("  Discovery failed: %s", disc.Error))
-			case DiscoveryReady:
-				var avails []DiscoveredSkill
-				for _, ds := range disc.Skills {
-					if !m.isSkillInstalled(ds.Name, row.groupName) {
-						avails = append(avails, ds)
-					}
-				}
-				if len(avails) == 0 {
-					if isRemote {
-						lines = append(lines, statusHeader, "  All discovered skills from this remote repository are installed.")
-					} else {
-						lines = append(lines, statusHeader, "  All discovered skills from this local source are installed.")
-					}
-				} else {
-					lines = append(lines, statusHeader)
-					for _, av := range avails {
-						lines = append(lines, fmt.Sprintf("  + %s", av.Name))
-					}
-				}
+				lines = append(lines, dimStyle.Render("Available: all installed."))
 			}
 		}
 
-		lines = append(lines,
-			"",
-			dimStyle.Render("Discovery shows installed and available skills from this source."),
-			dimStyle.Render("Use d to refresh local/remote source discovery."),
-		)
+		lines = append(lines, "", dimStyle.Render("enter to browse · d to scan"))
 		var wrapped []string
 		for _, line := range lines {
 			wrapped = append(wrapped, wrapText(line, width))
 		}
 		return wrapped
-	}
-
-	if row.isAvailable {
-		ds := row.discoveredSkill
-		if ds.Preview != "" {
-			var lines []string
-			previewLines := strings.Split(ds.Preview, "\n")
-			for _, line := range previewLines {
-				lines = append(lines, wrapText(line, width))
-			}
-			return lines
-		}
-		return []string{
-			dimStyle.Render("No preview content found for this available skill."),
-			"",
-			dimStyle.Render("Press 'c' to open actions and install it."),
-		}
 	}
 
 	view := display.Skill(row.skill)
@@ -657,7 +582,7 @@ func (m appModel) detailLines(width int) []string {
 		return m.metadataLines(width)
 	}
 	row := rows[m.selected]
-	if row.isHeader || row.isAvailable {
+	if row.isHeader {
 		return m.metadataLines(width)
 	}
 	view := display.Skill(row.skill)
@@ -1120,9 +1045,7 @@ func (m appModel) footerText(width int) string {
 		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
 			row := rows[m.selected]
 			if row.isHeader {
-				text = "enter details · c source actions · h/- collapse · l/+ expand · d discover · ? help"
-			} else if row.isAvailable {
-				text = "enter preview · c install actions · ? help"
+				text = "enter browse · d scan · c source actions · h/- collapse · l/+ expand · ? help"
 			} else {
 				text = "enter open · c skill actions · o edit · u update · x remove · ? help"
 			}
@@ -1237,19 +1160,12 @@ func (m appModel) detailModalTitle() string {
 	if row.isHeader {
 		return "Source Detail View"
 	}
-	if row.isAvailable {
-		return "Available Skill Detail View"
-	}
 	return "Skill Detail View"
 }
 
 func (m appModel) detailModalHelpLine() string {
 	if m.modalSource != "" {
-		return "esc/q close · ↑/↓ select skill · c actions · o/u/x installed actions"
-	}
-	rows := m.visibleRows()
-	if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) && rows[m.selected].isAvailable {
-		return "esc/q close · c install actions · ↑/↓ scroll"
+		return "esc/q close · ↑/↓ select skill · d scan · c actions · o/u/x installed actions"
 	}
 	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
 }

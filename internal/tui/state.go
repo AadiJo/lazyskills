@@ -64,12 +64,10 @@ func (m *appModel) syncViewport() {
 }
 
 type skillsRow struct {
-	isHeader        bool
-	isAvailable     bool
-	groupName       string
-	skill           *model.Skill
-	discoveredSkill *DiscoveredSkill
-	skillIndex      int
+	isHeader   bool
+	groupName  string
+	skill      *model.Skill
+	skillIndex int
 }
 
 func (m appModel) visibleRows() []skillsRow {
@@ -79,9 +77,6 @@ func (m appModel) visibleRows() []skillsRow {
 	for i, skill := range items {
 		group := listGroupLabel(skill)
 		if group != previousGroup {
-			if previousGroup != "" && !m.isCollapsed(previousGroup) {
-				rows = append(rows, m.getAvailableRowsForGroup(previousGroup)...)
-			}
 			rows = append(rows, skillsRow{
 				isHeader:   true,
 				groupName:  group,
@@ -99,30 +94,23 @@ func (m appModel) visibleRows() []skillsRow {
 			skillIndex: i,
 		})
 	}
-	if previousGroup != "" && !m.isCollapsed(previousGroup) {
-		rows = append(rows, m.getAvailableRowsForGroup(previousGroup)...)
-	}
 	return rows
 }
 
-func (m appModel) getAvailableRowsForGroup(groupName string) []skillsRow {
-	var rows []skillsRow
+// availableCount reports how many discovered-but-not-installed skills a source
+// group has, once it has been scanned. Zero when not yet scanned.
+func (m appModel) availableCount(groupName string) int {
 	disc, ok := m.discovery[groupName]
 	if !ok || disc.Status != DiscoveryReady {
-		return nil
+		return 0
 	}
-	for i, ds := range disc.Skills {
+	n := 0
+	for _, ds := range disc.Skills {
 		if !m.isSkillInstalled(ds.Name, groupName) {
-			rows = append(rows, skillsRow{
-				isHeader:        false,
-				isAvailable:     true,
-				groupName:       groupName,
-				discoveredSkill: &disc.Skills[i],
-				skillIndex:      -1,
-			})
+			n++
 		}
 	}
-	return rows
+	return n
 }
 
 func (m appModel) getGroupCounts(group string) (visible int, total int) {

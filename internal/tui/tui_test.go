@@ -1333,7 +1333,7 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 	// 1b. Source row selected footer
 	m.selected = 0
 	outHeaderFooter := m.View()
-	if !strings.Contains(outHeaderFooter, "enter details · c source actions") {
+	if !strings.Contains(outHeaderFooter, "enter browse · d scan · c source actions") {
 		t.Fatalf("expected source group footer in View, got:\n%s", outHeaderFooter)
 	}
 	m.selected = 1
@@ -1542,17 +1542,17 @@ func TestRichSourceInventoryMetadataAndActions(t *testing.T) {
 		t.Errorf("hash should no longer appear in metadata, got %q", metaJoined)
 	}
 
-	// 2. Assert source preview listing installed skills
+	// 2. Assert source preview shows a compact summary (full browser is the modal)
 	prevLines := m.previewLines(80)
 	prevJoined := strings.Join(prevLines, "\n")
-	if !strings.Contains(prevJoined, "Installed Skills:") {
-		t.Errorf("expected Installed Skills header in preview, got %q", prevJoined)
+	if !strings.Contains(prevJoined, "Installed: 2") {
+		t.Errorf("expected installed count in preview, got %q", prevJoined)
 	}
-	if !strings.Contains(prevJoined, "• One [P]") || !strings.Contains(prevJoined, "• Two [G]") {
-		t.Errorf("expected skills listed with scope badges in preview, got %q", prevJoined)
+	if !strings.Contains(prevJoined, "Available: press d to scan.") {
+		t.Errorf("expected available scan hint in preview, got %q", prevJoined)
 	}
-	if !strings.Contains(prevJoined, "Discovery shows installed and available skills from this source.") || !strings.Contains(prevJoined, "Use d to refresh local/remote source discovery.") {
-		t.Errorf("expected preview footnotes in preview, got %q", prevJoined)
+	if !strings.Contains(prevJoined, "enter to browse · d to scan") {
+		t.Errorf("expected action hint in preview, got %q", prevJoined)
 	}
 
 	// 3. Assert currentActions for source row
@@ -1627,16 +1627,18 @@ func TestRemoteDiscoverySuccess(t *testing.T) {
 		t.Fatalf("expected empty captured ref, got %s", capturedRef)
 	}
 
-	rows := next.visibleRows()
 	var foundAvailable bool
-	for _, r := range rows {
-		if r.isAvailable && r.discoveredSkill != nil && r.discoveredSkill.Name == "Remote Skill" {
+	for _, ds := range next.discovery["owner/repo"].Skills {
+		if ds.Name == "Remote Skill" {
 			foundAvailable = true
 			break
 		}
 	}
 	if !foundAvailable {
-		t.Fatalf("expected available row for 'Remote Skill', but not found in rows: %#v", rows)
+		t.Fatalf("expected 'Remote Skill' among discovered skills, got %#v", next.discovery["owner/repo"].Skills)
+	}
+	if next.availableCount("owner/repo") < 1 {
+		t.Fatalf("expected at least one available (uninstalled) skill, got %d", next.availableCount("owner/repo"))
 	}
 }
 

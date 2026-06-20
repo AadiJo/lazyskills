@@ -341,10 +341,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.syncViewport()
 						return m, cmd
 					}
-				} else if row.isAvailable {
-					m.focus = focusPreview
-					m.detailsFocused = true
-					m.syncViewport()
 				} else {
 					m.detailModal = true
 					m.modalSource = ""
@@ -356,17 +352,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "o":
 			rows := m.visibleRows()
-			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader && !rows[m.selected].isAvailable {
+			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader {
 				return m.startCurrentSkillActionByID("open_skill")
 			}
 		case "u":
 			rows := m.visibleRows()
-			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader && !rows[m.selected].isAvailable {
+			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader {
 				return m.startActionByID(preferredUpdateActionID(m.selectedCount()))
 			}
 		case "x":
 			rows := m.visibleRows()
-			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader && !rows[m.selected].isAvailable {
+			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader {
 				return m.startActionByID(preferredRemoveActionID(m.selectedCount()))
 			}
 		case "d":
@@ -566,9 +562,6 @@ func (m appModel) currentActions() []actions.CommandPreview {
 	row := rows[m.selected]
 	if row.isHeader {
 		return m.sourceActions(row.groupName)
-	}
-	if row.isAvailable {
-		return actions.ForAvailableSkill(row.groupName, row.discoveredSkill.Name)
 	}
 	return actions.ForSkill(row.skill)
 }
