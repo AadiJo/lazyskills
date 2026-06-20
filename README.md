@@ -31,12 +31,12 @@ LazySkills is a terminal UI for managing agent skills. It gives you one place to
 
 ## ✨ Features
 
-- **See every skill in one place** — project, global, universal, and agent-specific skills in a single TUI.
-- **Check agent visibility** — switch agents and see which skills are actually usable by Claude Code, OpenCode, Codex, Cursor, Gemini CLI, and many more.
-- **Spot broken installs fast** — highlights missing `SKILL.md`, invalid frontmatter, broken symlinks, missing lock entries, and ghost agent skills.
-- **Preview before you act** — inspect metadata, rendered skill content, and the exact command LazySkills is about to run.
-- **Safe skill actions** — open, reinstall/update, remove, prune orphaned locks, or run bulk updates/removals with confirmation prompts.
-- **Discover more from a source** — scan local checkouts or GitHub skill sources to find skills you have not installed yet.
+- **See every skill in one place** - project, global, universal, and agent-specific skills in a single TUI.
+- **Check agent visibility** - switch agents and see which skills are actually usable by Claude Code, OpenCode, Codex, Cursor, Gemini CLI, and many more.
+- **Spot broken installs fast** - highlights missing `SKILL.md`, invalid frontmatter, broken symlinks, missing lock entries, and ghost agent skills.
+- **Preview before you act** - inspect metadata, rendered skill content, and the exact command LazySkills is about to run.
+- **Safe skill actions** - open, reinstall/update, remove, prune orphaned locks, or run bulk updates/removals with confirmation prompts.
+- **Discover more from a source** - scan local checkouts or GitHub skill sources to find skills you have not installed yet.
 
 ## 🛠️ Install
 
@@ -111,4 +111,4 @@ Winners are drawn from stargazers and announced in the [sticker giveaway issue](
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
