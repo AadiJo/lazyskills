@@ -81,6 +81,7 @@ type appModel struct {
 	focus            focusState
 	collapsedGroups  map[string]bool
 	discovery        map[string]SourceDiscovery
+	previewCache     map[previewCacheKey][]string
 	skillSearchText  map[*model.Skill]string
 	modalSelected    int
 	modalSource      string
@@ -176,6 +177,7 @@ func newModel(cwd string) appModel {
 		previewViewport:  viewport.New(0, 0),
 		collapsedGroups:  make(map[string]bool),
 		discovery:        make(map[string]SourceDiscovery),
+		previewCache:     make(map[previewCacheKey][]string),
 	}
 }
 

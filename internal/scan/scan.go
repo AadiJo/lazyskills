@@ -71,14 +71,16 @@ func Run(cwd string) (model.ScanResult, error) {
 		res.HealthIssues = append(res.HealthIssues, model.HealthIssue{Type: "corrupt_global_lock", Severity: "warning", Message: err.Error(), Path: res.GlobalLock})
 	}
 
+	activeScanCache := map[locationScanCacheKey][]scannedLocationRecord{}
 	for _, loc := range agents.Locations(absCwd) {
-		scanLocation(loc, skills)
+		scanLocationCached(loc, skills, activeScanCache)
 		scanDisabledLocation(loc, skills)
 	}
 
-	correlateLocks(skills, localLock.Skills, globalLock.Skills)
+	index := newLockMatchIndex(skills)
+	correlateLocksIndexed(skills, localLock.Skills, globalLock.Skills)
 	for key, entry := range localLock.Skills {
-		if !hasLockMatch(skills, model.ScopeProject, key) {
+		if !index.hasMatch(model.ScopeProject, key) {
 			sk := ensureSkill(skills, model.ScopeProject, key, key, "")
 			e := entry
 			sk.LocalLock = &e
@@ -86,7 +88,7 @@ func Run(cwd string) (model.ScanResult, error) {
 		}
 	}
 	for key, entry := range globalLock.Skills {
-		if !hasLockMatch(skills, model.ScopeGlobal, key) {
+		if !index.hasMatch(model.ScopeGlobal, key) {
 			sk := ensureSkill(skills, model.ScopeGlobal, key, key, "")
 			e := entry
 			sk.GlobalLock = &e
@@ -289,11 +291,43 @@ func scanDisabledLocation(loc agents.Location, skills map[string]*model.Skill) {
 	}
 }
 
+type locationScanCacheKey struct {
+	root      string
+	scope     model.Scope
+	canonical bool
+}
+
+type scannedLocationRecord struct {
+	keyHint       string
+	name          string
+	description   string
+	skillPath     string
+	preview       string
+	canonicalPath string
+	observed      model.ObservedPath
+	healthIssues  []model.HealthIssue
+}
+
+func scanLocationCached(loc agents.Location, skills map[string]*model.Skill, cache map[locationScanCacheKey][]scannedLocationRecord) {
+	key := locationScanCacheKey{root: loc.Root, scope: loc.Scope, canonical: loc.Canonical}
+	records, ok := cache[key]
+	if !ok {
+		records = scanLocationRecords(loc)
+		cache[key] = records
+	}
+	applyScannedLocationRecords(loc, skills, records)
+}
+
 func scanLocation(loc agents.Location, skills map[string]*model.Skill) {
+	applyScannedLocationRecords(loc, skills, scanLocationRecords(loc))
+}
+
+func scanLocationRecords(loc agents.Location) []scannedLocationRecord {
 	entries, err := os.ReadDir(loc.Root)
 	if err != nil {
-		return
+		return nil
 	}
+	records := make([]scannedLocationRecord, 0, len(entries))
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
@@ -317,9 +351,17 @@ func scanLocation(loc agents.Location, skills map[string]*model.Skill) {
 			observed.TargetPath = filepath.Clean(target)
 			if st, err := os.Stat(path); err != nil || !st.IsDir() {
 				observed.Status = model.StatusBrokenSymlink
-				sk := ensureSkill(skills, loc.Scope, entry.Name(), entry.Name(), "")
-				addObservedPath(sk, observed)
-				sk.AddHealthIssue(model.HealthIssue{Type: "broken_symlink", Severity: "error", Message: "skill path is a broken symlink", Path: path})
+				records = append(records, scannedLocationRecord{
+					keyHint: entry.Name(),
+					name:    entry.Name(),
+					observed: model.ObservedPath{
+						Path:       observed.Path,
+						Scope:      observed.Scope,
+						Status:     observed.Status,
+						TargetPath: observed.TargetPath,
+					},
+					healthIssues: []model.HealthIssue{{Type: "broken_symlink", Severity: "error", Message: "skill path is a broken symlink", Path: path}},
+				})
 				continue
 			}
 			observed.Status = model.StatusSymlink
@@ -331,27 +373,64 @@ func scanLocation(loc agents.Location, skills map[string]*model.Skill) {
 		skillFile := filepath.Join(parseDir, "SKILL.md")
 		doc, err := frontmatter.ParseFile(skillFile)
 		if err != nil {
-			sk := ensureSkill(skills, loc.Scope, entry.Name(), entry.Name(), "")
-			addObservedPath(sk, observed)
 			issueType := "invalid_frontmatter"
 			if errors.Is(err, os.ErrNotExist) {
 				issueType = "missing_skill_md"
 			}
-			sk.AddHealthIssue(model.HealthIssue{Type: issueType, Severity: "error", Message: fmt.Sprintf("invalid SKILL.md: %v", err), Path: skillFile})
+			records = append(records, scannedLocationRecord{
+				keyHint: entry.Name(),
+				name:    entry.Name(),
+				observed: model.ObservedPath{
+					Path:       observed.Path,
+					Scope:      observed.Scope,
+					Status:     observed.Status,
+					TargetPath: observed.TargetPath,
+				},
+				healthIssues: []model.HealthIssue{{Type: issueType, Severity: "error", Message: fmt.Sprintf("invalid SKILL.md: %v", err), Path: skillFile}},
+			})
 			continue
 		}
 
-		sk := ensureSkill(skills, loc.Scope, entry.Name(), doc.Name, doc.Description)
-		if loc.Canonical && sk.CanonicalPath == "" {
-			sk.CanonicalPath = path
+		canonicalPath := ""
+		if loc.Canonical {
+			canonicalPath = path
 		}
-		if sk.SkillPath == "" {
-			sk.SkillPath = skillFile
+		records = append(records, scannedLocationRecord{
+			keyHint:       entry.Name(),
+			name:          doc.Name,
+			description:   doc.Description,
+			skillPath:     skillFile,
+			preview:       doc.Raw,
+			canonicalPath: canonicalPath,
+			observed: model.ObservedPath{
+				Path:       observed.Path,
+				Scope:      observed.Scope,
+				Status:     observed.Status,
+				TargetPath: observed.TargetPath,
+			},
+		})
+	}
+	return records
+}
+
+func applyScannedLocationRecords(loc agents.Location, skills map[string]*model.Skill, records []scannedLocationRecord) {
+	for _, record := range records {
+		sk := ensureSkill(skills, loc.Scope, record.keyHint, record.name, record.description)
+		if record.canonicalPath != "" && sk.CanonicalPath == "" {
+			sk.CanonicalPath = record.canonicalPath
 		}
-		if sk.Preview == "" {
-			sk.Preview = doc.Raw
+		if record.skillPath != "" && sk.SkillPath == "" {
+			sk.SkillPath = record.skillPath
 		}
+		if record.preview != "" && sk.Preview == "" {
+			sk.Preview = record.preview
+		}
+		observed := record.observed
+		observed.Agent = loc.AgentName
 		addObservedPath(sk, observed)
+		for _, issue := range record.healthIssues {
+			sk.AddHealthIssue(issue)
+		}
 	}
 }
 
@@ -400,6 +479,118 @@ func correlateLocks(skills map[string]*model.Skill, local map[string]model.Local
 			}
 		}
 	}
+}
+
+func correlateLocksIndexed(skills map[string]*model.Skill, local map[string]model.LocalLockEntry, global map[string]model.GlobalLockEntry) {
+	localIndex := newLocalLockLookup(local)
+	globalIndex := newGlobalLockLookup(global)
+	for _, sk := range skills {
+		if sk.Scope == model.ScopeProject {
+			if e, ok := localIndex.find(sk); ok {
+				entry := e
+				sk.LocalLock = &entry
+			}
+		}
+		if sk.Scope == model.ScopeGlobal {
+			if e, ok := globalIndex.find(sk); ok {
+				entry := e
+				sk.GlobalLock = &entry
+			}
+		}
+	}
+}
+
+type localLockLookup struct {
+	byKey        map[string]model.LocalLockEntry
+	byNormalized map[string]model.LocalLockEntry
+}
+
+func newLocalLockLookup(lock map[string]model.LocalLockEntry) localLockLookup {
+	lookup := localLockLookup{byKey: map[string]model.LocalLockEntry{}, byNormalized: map[string]model.LocalLockEntry{}}
+	for key, entry := range lock {
+		lookup.byKey[key] = entry
+		normalized := compat.NormalizeName(key)
+		if _, exists := lookup.byNormalized[normalized]; !exists {
+			lookup.byNormalized[normalized] = entry
+		}
+	}
+	return lookup
+}
+
+func (lookup localLockLookup) find(sk *model.Skill) (model.LocalLockEntry, bool) {
+	for _, candidate := range candidateLockKeys(sk) {
+		if entry, ok := lookup.byKey[candidate]; ok {
+			return entry, true
+		}
+		if entry, ok := lookup.byKey[compat.SanitizeName(candidate)]; ok {
+			return entry, true
+		}
+		if entry, ok := lookup.byNormalized[compat.NormalizeName(candidate)]; ok {
+			return entry, true
+		}
+	}
+	return model.LocalLockEntry{}, false
+}
+
+type globalLockLookup struct {
+	byKey        map[string]model.GlobalLockEntry
+	byNormalized map[string]model.GlobalLockEntry
+}
+
+func newGlobalLockLookup(lock map[string]model.GlobalLockEntry) globalLockLookup {
+	lookup := globalLockLookup{byKey: map[string]model.GlobalLockEntry{}, byNormalized: map[string]model.GlobalLockEntry{}}
+	for key, entry := range lock {
+		lookup.byKey[key] = entry
+		normalized := compat.NormalizeName(key)
+		if _, exists := lookup.byNormalized[normalized]; !exists {
+			lookup.byNormalized[normalized] = entry
+		}
+	}
+	return lookup
+}
+
+func (lookup globalLockLookup) find(sk *model.Skill) (model.GlobalLockEntry, bool) {
+	for _, candidate := range candidateLockKeys(sk) {
+		if entry, ok := lookup.byKey[candidate]; ok {
+			return entry, true
+		}
+		if entry, ok := lookup.byKey[compat.SanitizeName(candidate)]; ok {
+			return entry, true
+		}
+		if entry, ok := lookup.byNormalized[compat.NormalizeName(candidate)]; ok {
+			return entry, true
+		}
+	}
+	return model.GlobalLockEntry{}, false
+}
+
+type lockMatchIndex struct {
+	project map[string]bool
+	global  map[string]bool
+}
+
+func newLockMatchIndex(skills map[string]*model.Skill) lockMatchIndex {
+	index := lockMatchIndex{project: map[string]bool{}, global: map[string]bool{}}
+	for _, sk := range skills {
+		target := index.project
+		if sk.Scope == model.ScopeGlobal {
+			target = index.global
+		}
+		for _, candidate := range candidateLockKeys(sk) {
+			target[candidate] = true
+			target[compat.SanitizeName(candidate)] = true
+			target[compat.NormalizeName(candidate)] = true
+		}
+	}
+	return index
+}
+
+func (index lockMatchIndex) hasMatch(scope model.Scope, key string) bool {
+	target := index.project
+	if scope == model.ScopeGlobal {
+		target = index.global
+	}
+	return target[key] || target[compat.NormalizeName(key)]
 }
 
 func candidateLockKeys(sk *model.Skill) []string {

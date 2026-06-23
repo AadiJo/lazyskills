@@ -671,7 +671,25 @@ func (m appModel) previewLinesForRows(rows []skillsRow, width int) []string {
 		return []string{dimStyle.Render("No preview available for this skill.")}
 	}
 
-	return renderMarkdownPreview(view.Preview, width)
+	return m.renderMarkdownPreviewCached(view.Preview, width)
+}
+
+type previewCacheKey struct {
+	markdown string
+	width    int
+}
+
+func (m appModel) renderMarkdownPreviewCached(markdown string, width int) []string {
+	if m.previewCache == nil {
+		return renderMarkdownPreview(markdown, width)
+	}
+	key := previewCacheKey{markdown: markdown, width: width}
+	if lines, ok := m.previewCache[key]; ok {
+		return append([]string(nil), lines...)
+	}
+	lines := renderMarkdownPreview(markdown, width)
+	m.previewCache[key] = append([]string(nil), lines...)
+	return lines
 }
 
 func renderMarkdownPreview(markdown string, width int) []string {
