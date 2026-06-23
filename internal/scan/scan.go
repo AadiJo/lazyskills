@@ -317,10 +317,6 @@ func scanLocationCached(loc agents.Location, skills map[string]*model.Skill, cac
 	applyScannedLocationRecords(loc, skills, records)
 }
 
-func scanLocation(loc agents.Location, skills map[string]*model.Skill) {
-	applyScannedLocationRecords(loc, skills, scanLocationRecords(loc))
-}
-
 func scanLocationRecords(loc agents.Location) []scannedLocationRecord {
 	entries, err := os.ReadDir(loc.Root)
 	if err != nil {
@@ -463,23 +459,6 @@ func addObservedPath(sk *model.Skill, observed model.ObservedPath) {
 	sk.ObservedPaths = append(sk.ObservedPaths, observed)
 }
 
-func correlateLocks(skills map[string]*model.Skill, local map[string]model.LocalLockEntry, global map[string]model.GlobalLockEntry) {
-	for _, sk := range skills {
-		if sk.Scope == model.ScopeProject {
-			if e, ok := findLocalLock(local, sk); ok {
-				entry := e
-				sk.LocalLock = &entry
-			}
-		}
-		if sk.Scope == model.ScopeGlobal {
-			if e, ok := findGlobalLock(global, sk); ok {
-				entry := e
-				sk.GlobalLock = &entry
-			}
-		}
-	}
-}
-
 func correlateLocksIndexed(skills map[string]*model.Skill, local map[string]model.LocalLockEntry, global map[string]model.GlobalLockEntry) {
 	localIndex := newLocalLockLookup(local)
 	globalIndex := newGlobalLockLookup(global)
@@ -599,42 +578,6 @@ func candidateLockKeys(sk *model.Skill) []string {
 		keys = append(keys, base, compat.SanitizeName(base))
 	}
 	return keys
-}
-
-func findLocalLock(lock map[string]model.LocalLockEntry, sk *model.Skill) (model.LocalLockEntry, bool) {
-	for key, entry := range lock {
-		if lockKeyMatches(key, sk) {
-			return entry, true
-		}
-	}
-	return model.LocalLockEntry{}, false
-}
-
-func findGlobalLock(lock map[string]model.GlobalLockEntry, sk *model.Skill) (model.GlobalLockEntry, bool) {
-	for key, entry := range lock {
-		if lockKeyMatches(key, sk) {
-			return entry, true
-		}
-	}
-	return model.GlobalLockEntry{}, false
-}
-
-func lockKeyMatches(key string, sk *model.Skill) bool {
-	for _, candidate := range candidateLockKeys(sk) {
-		if key == candidate || key == compat.SanitizeName(candidate) || compat.NormalizeName(key) == compat.NormalizeName(candidate) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasLockMatch(skills map[string]*model.Skill, scope model.Scope, key string) bool {
-	for _, sk := range skills {
-		if sk.Scope == scope && lockKeyMatches(key, sk) {
-			return true
-		}
-	}
-	return false
 }
 
 func addDuplicateAndShadowingIssues(skills map[string]*model.Skill) {
