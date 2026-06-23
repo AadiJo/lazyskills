@@ -4,7 +4,7 @@
 
 # Lazy Skills
 
-**Mission control for agent skills.**
+**Blazing-fast mission control for agent skills.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/alvinunreal/lazyskills/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0f172a&color=3dbbff)](https://github.com/alvinunreal/lazyskills/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/alvinunreal/lazyskills?style=flat-square)](https://goreportcard.com/report/github.com/alvinunreal/lazyskills)
@@ -21,7 +21,7 @@ _"I don't debug broken skills by hand - I have a TUI to be disappointed for me."
 
 ## 🌴 Overview
 
-LazySkills is a terminal UI for managing agent skills. It gives you one place to see what is installed, which agents can use each skill, why visibility may be broken, and what actions are safe to run next.
+LazySkills is a blazing-fast terminal UI for managing agent skills. It gives you one place to see what is installed, which agents can use each skill, why visibility may be broken, and what actions are safe to run next.
 
 <div align="center">
 
