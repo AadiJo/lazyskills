@@ -1597,13 +1597,22 @@ func TestSkillsFindTriggersRescan(t *testing.T) {
 }
 
 func TestContextualFooterAndHelpModal(t *testing.T) {
+	oldLookPath := actions.LookPath
+	actions.LookPath = func(file string) (string, error) {
+		if file == "skills" {
+			return "/usr/bin/skills", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { actions.LookPath = oldLookPath })
+
 	m := appModel{
 		width:    100,
 		height:   30,
 		selected: 1,
 		result: model.ScanResult{
 			Skills: []*model.Skill{
-				{Name: "Build", Scope: model.ScopeProject},
+				{Name: "Build", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}, ObservedPaths: []model.ObservedPath{{Path: "/tmp/build", Scope: model.ScopeProject, Status: model.StatusCanonical}}},
 			},
 		},
 	}
@@ -1613,6 +1622,9 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 	outDefault := m.View()
 	if !strings.Contains(outDefault, "enter open · e enable/disable · c actions") {
 		t.Fatalf("expected default footer in View, got:\n%s", outDefault)
+	}
+	if !strings.Contains(outDefault, "u update") || !strings.Contains(outDefault, "x remove") {
+		t.Fatalf("expected tracked skill footer to include update/remove, got:\n%s", outDefault)
 	}
 
 	// 1b. Source row selected footer
@@ -1662,6 +1674,139 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 	m = updated.(appModel)
 	if m.helpOpen {
 		t.Fatal("expected q to close help modal")
+	}
+}
+
+func TestFooterHidesUnavailableSkillHotkeys(t *testing.T) {
+	oldLookPath := actions.LookPath
+	actions.LookPath = func(file string) (string, error) {
+		if file == "skills" {
+			return "/usr/bin/skills", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { actions.LookPath = oldLookPath })
+
+	m := appModel{
+		width:    100,
+		height:   30,
+		selected: 1,
+		result: model.ScanResult{Skills: []*model.Skill{{
+			Name:          "Loose Skill",
+			Scope:         model.ScopeGlobal,
+			CanonicalPath: "/tmp/loose-skill",
+		}}},
+	}
+	m.syncViewport()
+
+	footer := m.footerText(100)
+	if strings.Contains(footer, "u update") {
+		t.Fatalf("untracked skill footer should hide unavailable update hotkey, got %q", footer)
+	}
+	if !strings.Contains(footer, "enter open") || !strings.Contains(footer, "c actions") || !strings.Contains(footer, "? help") {
+		t.Fatalf("expected neutral actions to remain visible, got %q", footer)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	next := updated.(appModel)
+	if cmd != nil || next.confirming || next.running {
+		t.Fatalf("unavailable update hotkey should stay idle, confirming=%v running=%v cmd=%v", next.confirming, next.running, cmd)
+	}
+}
+
+func TestSourceScanHintIgnoresBulkSelection(t *testing.T) {
+	m := appModel{
+		width:    120,
+		height:   32,
+		selected: 0,
+		result: model.ScanResult{Skills: []*model.Skill{
+			{Name: "One", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}},
+			{Name: "Two", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}},
+		}},
+	}
+	m.selectedKeys = map[string]bool{skillKey(m.result.Skills[0]): true}
+	m.syncViewport()
+
+	footer := m.footerText(120)
+	if !strings.Contains(footer, "d scan") {
+		t.Fatalf("source header should show scan even with bulk selection active, got %q", footer)
+	}
+}
+
+func TestDetailModalHelpHidesUnavailableOpen(t *testing.T) {
+	t.Setenv("EDITOR", "")
+	m := appModel{
+		width:       120,
+		height:      32,
+		selected:    1,
+		detailModal: true,
+		result: model.ScanResult{Skills: []*model.Skill{{
+			Name:  "Loose Skill",
+			Scope: model.ScopeProject,
+		}}},
+	}
+
+	help := m.detailModalHelpLine()
+	if strings.Contains(help, "o open") || strings.Contains(help, "o open in editor") {
+		t.Fatalf("detail modal should hide unavailable open hint, got %q", help)
+	}
+	if !strings.Contains(help, "c command picker") || !strings.Contains(help, "↑/↓ scroll") {
+		t.Fatalf("detail modal should keep neutral hints, got %q", help)
+	}
+}
+
+func TestDetailModalOpenHintIgnoresBulkSelection(t *testing.T) {
+	t.Setenv("EDITOR", "vim")
+	m := appModel{
+		width:       120,
+		height:      32,
+		selected:    2,
+		detailModal: true,
+		result: model.ScanResult{Skills: []*model.Skill{
+			{Name: "Selected Elsewhere", Scope: model.ScopeProject, SkillPath: "/tmp/selected/SKILL.md"},
+			{Name: "Current Detail", Scope: model.ScopeProject, SkillPath: "/tmp/current/SKILL.md"},
+		}},
+	}
+	m.selectedKeys = map[string]bool{skillKey(m.result.Skills[0]): true}
+	m.syncViewport()
+
+	help := m.detailModalHelpLine()
+	if !strings.Contains(help, "o open in editor") {
+		t.Fatalf("detail modal should show current-row open hint even with bulk selection, got %q", help)
+	}
+}
+
+func TestSourceModalHelpIsCapabilityAware(t *testing.T) {
+	oldLookPath := actions.LookPath
+	actions.LookPath = func(file string) (string, error) {
+		if file == "skills" {
+			return "/usr/bin/skills", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { actions.LookPath = oldLookPath })
+	t.Setenv("EDITOR", "")
+
+	m := appModel{
+		width:       120,
+		height:      32,
+		selected:    0,
+		detailModal: true,
+		modalSource: "owner/repo",
+		result: model.ScanResult{Skills: []*model.Skill{{
+			Name:      "Installed",
+			Scope:     model.ScopeProject,
+			LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+		}}},
+	}
+	m.syncViewport()
+
+	help := m.detailModalHelpLine()
+	if strings.Contains(help, "enter open") || strings.Contains(help, "o open") {
+		t.Fatalf("source modal should hide unavailable installed-skill open hints, got %q", help)
+	}
+	if !strings.Contains(help, "d scan") || !strings.Contains(help, "c more") {
+		t.Fatalf("source modal should keep available scan and actions hints, got %q", help)
 	}
 }
 

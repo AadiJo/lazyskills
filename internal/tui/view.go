@@ -8,6 +8,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
+	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
@@ -1254,27 +1255,66 @@ func (m appModel) footerText(width int) string {
 	} else if m.searching {
 		text = "type search · enter apply · esc cancel · backspace edit"
 	} else if m.detailModal {
-		text = "↑/↓ scroll · o edit · c commands · esc/q close"
+		modalActions := m.currentActions()
+		parts := []string{"↑/↓ scroll"}
+		if hasAvailableAction(modalActions, "open_skill") {
+			parts = append(parts, "o edit")
+		}
+		parts = append(parts, "c commands", "esc/q close")
+		text = strings.Join(parts, " · ")
 	} else if m.commands {
 		text = "↑/↓ choose · enter run · e enable/disable · esc close"
 	} else if m.helpOpen {
 		text = "esc/q/? close help"
 	} else if m.focus == focusMetadata {
-		text = "↑/↓ scroll metadata · enter open · c commands · e enable/disable · ? help"
+		footerActions := m.currentActions()
+		parts := []string{"↑/↓ scroll metadata", "enter open", "c commands"}
+		if hasAvailableToggleAction(footerActions) {
+			parts = append(parts, "e enable/disable")
+		}
+		parts = append(parts, "? help")
+		text = strings.Join(parts, " · ")
 	} else if m.focus == focusPreview {
-		text = "↑/↓ scroll preview · enter open · c commands · e enable/disable · ? help"
+		footerActions := m.currentActions()
+		parts := []string{"↑/↓ scroll preview", "enter open", "c commands"}
+		if hasAvailableToggleAction(footerActions) {
+			parts = append(parts, "e enable/disable")
+		}
+		parts = append(parts, "? help")
+		text = strings.Join(parts, " · ")
 	} else {
 		// focusSkills
 		rows := m.visibleRows()
 		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
 			row := rows[m.selected]
+			footerActions := m.currentActions()
 			if row.isHeader {
-				text = "enter browse · e enable/disable source · d scan · c actions · ? help"
+				parts := []string{"enter browse"}
+				if hasAvailableToggleAction(footerActions) {
+					parts = append(parts, "e enable/disable source")
+				}
+				if discoverable, _ := m.isSourceDiscoverable(row.groupName); discoverable {
+					parts = append(parts, "d scan")
+				}
+				parts = append(parts, "c actions", "? help")
+				text = strings.Join(parts, " · ")
 			} else {
-				text = "enter open · e enable/disable · c actions · u update · x remove · ? help"
+				parts := []string{"enter open"}
+				if hasAvailableToggleAction(footerActions) {
+					parts = append(parts, "e enable/disable")
+				}
+				parts = append(parts, "c actions")
+				if hasAvailableAction(footerActions, preferredUpdateActionID(m.selectedCount())) {
+					parts = append(parts, "u update")
+				}
+				if hasAvailableAction(footerActions, preferredRemoveActionID(m.selectedCount())) {
+					parts = append(parts, "x remove")
+				}
+				parts = append(parts, "? help")
+				text = strings.Join(parts, " · ")
 			}
 		} else {
-			text = "enter open · e enable/disable · c actions · u update · x remove · ? help"
+			text = "enter open · c actions · ? help"
 		}
 	}
 	isNormalState := !m.running && !m.confirming && !m.searching && !m.detailModal && !m.commands && !m.helpOpen
@@ -1289,6 +1329,22 @@ func (m appModel) footerText(width int) string {
 		}
 	}
 	return dimStyle.Render(truncate(text, width))
+}
+
+func hasAvailableAction(previews []actions.CommandPreview, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, action := range previews {
+		if action.ID == id && action.Available {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAvailableToggleAction(previews []actions.CommandPreview) bool {
+	return hasAvailableAction(previews, "enable_skill") || hasAvailableAction(previews, "disable_skill")
 }
 
 func (m appModel) helpModalOverlay(layout appLayout) string {
@@ -1388,10 +1444,36 @@ func (m appModel) detailModalTitle() string {
 }
 
 func (m appModel) detailModalHelpLine() string {
+	modalActions := m.currentActions()
 	if m.modalSource != "" {
-		return "esc/q close · ↑/↓ select · enter install/open · c more · d scan"
+		parts := []string{"esc/q close", "↑/↓ select"}
+		if child, ok := m.currentModalSelectedChild(); ok {
+			if child.isAvailable && hasAvailableAction(modalActions, "install_skill") {
+				parts = append(parts, "enter install")
+			} else if !child.isAvailable && hasAvailableAction(modalActions, "open_skill") {
+				parts = append(parts, "enter open", "o open")
+			}
+		}
+		parts = append(parts, "c more")
+		if discoverable, _ := m.isSourceDiscoverable(m.modalSource); discoverable {
+			parts = append(parts, "d scan")
+		}
+		return strings.Join(parts, " · ")
 	}
-	return "esc/q close · o open in editor · c command picker · ↑/↓ scroll"
+	parts := []string{"esc/q close"}
+	if hasAvailableAction(m.currentDetailSkillActions(), "open_skill") {
+		parts = append(parts, "o open in editor")
+	}
+	parts = append(parts, "c command picker", "↑/↓ scroll")
+	return strings.Join(parts, " · ")
+}
+
+func (m appModel) currentDetailSkillActions() []actions.CommandPreview {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) || rows[m.selected].isHeader {
+		return nil
+	}
+	return actions.ForSkill(rows[m.selected].skill)
 }
 
 func (m *appModel) ensureSourceModalSelectionVisible() {
