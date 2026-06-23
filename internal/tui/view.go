@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
@@ -14,6 +15,10 @@ import (
 )
 
 func (m appModel) View() string {
+	viewStart := time.Now()
+	defer func() {
+		perfLogf("view selected=%d focus=%d modal=%t source=%q preview_pending=%t duration=%s", m.selected, m.focus, m.detailModal, m.modalSource, m.previewPending, time.Since(viewStart))
+	}()
 	if m.err != nil {
 		return fitToScreen(errorStyle.Render(fmt.Sprintf("LazySkills error: %s\n\nPress q to quit.", compat.SanitizeMetadata(m.err.Error()))), viewWidth(m.width), viewHeight(m.height))
 	}
@@ -38,14 +43,20 @@ func (m appModel) View() string {
 		return m.commandsOverlay(layout)
 	}
 
-	// Keep View pure for callers: sync a local copy so render-time fallback
-	// sizing does not mutate the model stored by Bubble Tea.
 	viewModel := m
 	viewModel.width = layout.Width
 	viewModel.height = layout.Height
-	viewModel.syncViewport()
 
 	listWidth, rightWidth, topHeight, bottomHeight := viewModel.getThreePaneLayout()
+	needsSync := viewModel.needsViewportSync(rightWidth, topHeight, bottomHeight)
+	perfLogf("view_pre selected=%d needs_sync=%t metadata_size=%dx%d preview_size=%dx%d", viewModel.selected, needsSync, viewModel.metadataViewport.Width, viewModel.metadataViewport.Height, viewModel.previewViewport.Width, viewModel.previewViewport.Height)
+	if needsSync {
+		// Keep View pure for callers: sync a local copy only when render-time
+		// fallback sizing is needed. Normal Update paths already call syncViewport;
+		// doing it again here makes every navigation frame recompute details and
+		// previews a second time.
+		viewModel.syncViewport()
+	}
 
 	listLayout := newPaneLayout(listWidth, viewModel.height-1)
 	metadataLayout := newPaneLayout(rightWidth, topHeight)
@@ -69,6 +80,14 @@ func (m appModel) View() string {
 
 	footer := viewModel.footerText(layout.Width)
 	return view + "\n" + footer
+}
+
+func (m appModel) needsViewportSync(rightWidth, topHeight, bottomHeight int) bool {
+	return m.metadataViewport.Width != max(1, rightWidth-4) ||
+		m.metadataViewport.Height != max(1, topHeight-2) ||
+		m.previewViewport.Width != max(1, rightWidth-4) ||
+		m.previewViewport.Height != max(1, bottomHeight-2) ||
+		m.viewportSyncFingerprint != m.currentViewportSyncFingerprint()
 }
 
 func scopeBadge(scope string) string {
@@ -670,6 +689,9 @@ func (m appModel) previewLinesForRows(rows []skillsRow, width int) []string {
 	if view.Preview == "" {
 		return []string{dimStyle.Render("No preview available for this skill.")}
 	}
+	if m.previewPending && !m.hasRenderedMarkdownPreview(view.Preview, width) {
+		return []string{dimStyle.Render("Preview updates when navigation pauses.")}
+	}
 
 	return m.renderMarkdownPreviewCached(view.Preview, width)
 }
@@ -690,6 +712,14 @@ func (m appModel) renderMarkdownPreviewCached(markdown string, width int) []stri
 	lines := renderMarkdownPreview(markdown, width)
 	m.previewCache[key] = append([]string(nil), lines...)
 	return lines
+}
+
+func (m appModel) hasRenderedMarkdownPreview(markdown string, width int) bool {
+	if m.previewCache == nil {
+		return false
+	}
+	_, ok := m.previewCache[previewCacheKey{markdown: markdown, width: width}]
+	return ok
 }
 
 func renderMarkdownPreview(markdown string, width int) []string {

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alvinunreal/lazyskills/internal/scan"
 )
 
@@ -30,6 +32,14 @@ type sourceProfileSample struct {
 	total     time.Duration
 	childRows int
 	lineCount int
+}
+
+type navProfileSample struct {
+	selected int
+	name     string
+	update   time.Duration
+	view     time.Duration
+	total    time.Duration
 }
 
 func TestProfileRealSkillDetailTimings(t *testing.T) {
@@ -220,6 +230,95 @@ func TestProfileRealSourceModalTimings(t *testing.T) {
 	logSourceStageSummary(t, "sync", samples, func(s sourceProfileSample) time.Duration { return s.sync })
 	logSourceStageSummary(t, "view", samples, func(s sourceProfileSample) time.Duration { return s.view })
 	logSourceStageSummary(t, "total", samples, func(s sourceProfileSample) time.Duration { return s.total })
+}
+
+func TestProfileRepeatedJNavigationTimings(t *testing.T) {
+	if os.Getenv("LAZYSKILLS_PROFILE_NAV") == "" {
+		t.Skip("set LAZYSKILLS_PROFILE_NAV=1 to profile repeated j navigation timings")
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd = strings.TrimSuffix(cwd, "/internal/tui")
+
+	start := time.Now()
+	result, err := scan.Snapshot(cwd)
+	snapshotDuration := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(cwd)
+	m.result = result
+	m.width = 120
+	m.height = 40
+	m.focus = focusSkills
+	m.syncViewport()
+
+	rows := m.visibleRows()
+	steps := len(rows) - 1
+	if steps > 40 {
+		steps = 40
+	}
+	if steps <= 0 {
+		t.Fatal("not enough visible rows to profile navigation")
+	}
+
+	t.Logf("snapshot=%s skills=%d visible_rows=%d steps=%d", snapshotDuration, len(result.Skills), len(rows), steps)
+
+	samples := make([]navProfileSample, 0, steps)
+	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}
+
+	for i := 0; i < steps; i++ {
+		totalStart := time.Now()
+
+		start = time.Now()
+		updated, _ := m.Update(key)
+		updateDuration := time.Since(start)
+		m = updated.(appModel)
+
+		start = time.Now()
+		_ = m.View()
+		viewDuration := time.Since(start)
+
+		totalDuration := time.Since(totalStart)
+		rows = m.visibleRows()
+		name := ""
+		if m.selected >= 0 && m.selected < len(rows) {
+			row := rows[m.selected]
+			if row.isHeader {
+				name = "source:" + row.groupName
+			} else if row.skill != nil {
+				name = row.skill.Name
+			}
+		}
+		s := navProfileSample{selected: m.selected, name: name, update: updateDuration, view: viewDuration, total: totalDuration}
+		samples = append(samples, s)
+		t.Logf("step=%d selected=%d item=%q update=%s view=%s total=%s", i+1, s.selected, s.name, s.update, s.view, s.total)
+	}
+
+	logNavStageSummary(t, "update", samples, func(s navProfileSample) time.Duration { return s.update })
+	logNavStageSummary(t, "view", samples, func(s navProfileSample) time.Duration { return s.view })
+	logNavStageSummary(t, "total", samples, func(s navProfileSample) time.Duration { return s.total })
+}
+
+func logNavStageSummary(t *testing.T, name string, samples []navProfileSample, pick func(navProfileSample) time.Duration) {
+	t.Helper()
+	values := make([]time.Duration, 0, len(samples))
+	var sum time.Duration
+	for _, s := range samples {
+		v := pick(s)
+		values = append(values, v)
+		sum += v
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	avg := time.Duration(0)
+	if len(values) > 0 {
+		avg = sum / time.Duration(len(values))
+	}
+	t.Logf("summary stage=%s min=%s p50=%s max=%s avg=%s", name, values[0], values[len(values)/2], values[len(values)-1], avg)
 }
 
 func logSourceStageSummary(t *testing.T, name string, samples []sourceProfileSample, pick func(sourceProfileSample) time.Duration) {

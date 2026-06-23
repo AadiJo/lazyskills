@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/compat"
@@ -10,6 +11,11 @@ import (
 )
 
 func (m *appModel) syncViewport() {
+	start := time.Now()
+	defer func() {
+		m.viewportSyncFingerprint = m.currentViewportSyncFingerprint()
+		perfLogf("sync selected=%d focus=%d modal=%t source=%q preview_pending=%t duration=%s", m.selected, m.focus, m.detailModal, m.modalSource, m.previewPending, time.Since(start))
+	}()
 	layout := newAppLayout(m.width, m.height)
 	if layout.Small {
 		m.viewport.Width = 0
@@ -49,6 +55,30 @@ func (m *appModel) syncViewport() {
 		m.previewViewport.SetContent(strings.Join(m.previewLinesForRows(rows, rightWidth-4), "\n"))
 	}
 	m.clampViewportOffset()
+}
+
+func (m appModel) currentViewportSyncFingerprint() string {
+	selectedKey := m.currentSelectedKey()
+	collapsed := false
+	if strings.HasPrefix(selectedKey, "group:") {
+		collapsed = m.isCollapsed(strings.TrimPrefix(selectedKey, "group:"))
+	}
+	return fmt.Sprintf("%d\x00%d\x00%d\x00%d\x00%s\x00%s\x00%t\x00%t\x00%t\x00%s\x00%d\x00%t\x00%s\x00%t",
+		m.width,
+		m.height,
+		m.selected,
+		m.focus,
+		m.agent,
+		m.search,
+		m.detailModal,
+		m.commands,
+		m.helpOpen,
+		m.modalSource,
+		m.modalSelected,
+		m.previewPending,
+		selectedKey,
+		collapsed,
+	)
 }
 
 type skillsRow struct {

@@ -17,7 +17,21 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/runner"
 )
 
+const previewRefreshDelay = 300 * time.Millisecond
+
+type previewRefreshMsg struct {
+	generation int
+}
+
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updateStart := time.Now()
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		key := keyMsg.String()
+		selectedBefore := m.selected
+		defer func() {
+			perfLogf("update key=%q selected_before=%d selected_after=%d focus=%d modal=%t source=%q preview_pending=%t generation=%d duration=%s", key, selectedBefore, m.selected, m.focus, m.detailModal, m.modalSource, m.previewPending, m.previewGeneration, time.Since(updateStart))
+		}()
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -26,6 +40,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncViewport()
 	case snapshotMsg:
 		m.result = msg.result
+		m.previewCache = make(map[previewCacheKey][]string)
+		m.previewPending = false
+		m.previewGeneration++
 		sortSkills(m.result.Skills)
 		m.rebuildSkillSearchText()
 		m.err = msg.err
@@ -76,8 +93,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.mutates && (succeeded || msg.partialSuccess) {
 			return m, loadSnapshot(m.cwd)
 		}
+	case previewRefreshMsg:
+		refreshStart := time.Now()
+		if msg.generation == m.previewGeneration {
+			m.previewPending = false
+			m.syncViewport()
+		}
+		perfLogf("preview_refresh msg_generation=%d current_generation=%d applied=%t duration=%s", msg.generation, m.previewGeneration, msg.generation == m.previewGeneration, time.Since(refreshStart))
 	case tea.KeyMsg:
 		key := msg.String()
+		var postKeyCmd tea.Cmd
 		if m.running {
 			if key == "ctrl+c" || key == "q" {
 				return m, tea.Quit
@@ -321,6 +346,26 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "gg" jumps to top: a lone g arms the flag, any other key disarms it.
 		gPending := m.pendingG
 		m.pendingG = false
+		if count := repeatedRuneKeyCount(key, 'j'); count > 1 {
+			m, postKeyCmd = m.moveSelectionBy(count)
+			m.clampSelection()
+			m.clampAction()
+			m.syncViewport()
+			if postKeyCmd != nil {
+				return m, postKeyCmd
+			}
+			return m, nil
+		}
+		if count := repeatedRuneKeyCount(key, 'k'); count > 1 {
+			m, postKeyCmd = m.moveSelectionBy(-count)
+			m.clampSelection()
+			m.clampAction()
+			m.syncViewport()
+			if postKeyCmd != nil {
+				return m, postKeyCmd
+			}
+			return m, nil
+		}
 
 		switch key {
 		case "esc":
@@ -503,13 +548,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.previewViewport.LineDown(1)
 				m.clampViewportOffset()
 			} else {
-				rows := m.visibleRows()
-				if m.selected < len(rows)-1 {
-					m.selected++
-					m.actionResult = nil
-					m.metadataViewport.GotoTop()
-					m.previewViewport.GotoTop()
-				}
+				m, postKeyCmd = m.moveSelectionBy(1)
 			}
 		case "up", "k":
 			if m.focus == focusMetadata {
@@ -519,12 +558,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.previewViewport.LineUp(1)
 				m.clampViewportOffset()
 			} else {
-				if m.selected > 0 {
-					m.selected--
-					m.actionResult = nil
-					m.metadataViewport.GotoTop()
-					m.previewViewport.GotoTop()
-				}
+				m, postKeyCmd = m.moveSelectionBy(-1)
 			}
 		case "pgdown", "ctrl+d":
 			var cmd tea.Cmd
@@ -562,8 +596,58 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampSelection()
 		m.clampAction()
 		m.syncViewport()
+		if postKeyCmd != nil {
+			return m, postKeyCmd
+		}
 	}
 	return m, nil
+}
+
+func repeatedRuneKeyCount(key string, r rune) int {
+	if key == "" {
+		return 0
+	}
+	count := 0
+	for _, ch := range key {
+		if ch != r {
+			return 0
+		}
+		count++
+	}
+	return count
+}
+
+func (m appModel) moveSelectionBy(delta int) (appModel, tea.Cmd) {
+	if delta == 0 {
+		return m, nil
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		return m, nil
+	}
+	previous := m.selected
+	m.selected += delta
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= len(rows) {
+		m.selected = len(rows) - 1
+	}
+	if m.selected == previous {
+		return m, nil
+	}
+	m.actionResult = nil
+	m.metadataViewport.GotoTop()
+	m.previewViewport.GotoTop()
+	m.previewGeneration++
+	m.previewPending = true
+	return m, schedulePreviewRefresh(m.previewGeneration)
+}
+
+func schedulePreviewRefresh(generation int) tea.Cmd {
+	return tea.Tick(previewRefreshDelay, func(time.Time) tea.Msg {
+		return previewRefreshMsg{generation: generation}
+	})
 }
 
 func (m *appModel) clampAction() {
