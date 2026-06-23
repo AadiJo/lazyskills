@@ -73,6 +73,7 @@ func Run(cwd string) (model.ScanResult, error) {
 
 	for _, loc := range agents.Locations(absCwd) {
 		scanLocation(loc, skills)
+		scanDisabledLocation(loc, skills)
 	}
 
 	correlateLocks(skills, localLock.Skills, globalLock.Skills)
@@ -107,6 +108,18 @@ func Run(cwd string) (model.ScanResult, error) {
 			}
 		}
 		sk.Visibility = skillVisibility(sk, res.Agents)
+
+		hasActive := false
+		hasDisabled := false
+		for _, obs := range sk.ObservedPaths {
+			if obs.Status == model.StatusDisabled {
+				hasDisabled = true
+			} else {
+				hasActive = true
+			}
+		}
+		sk.Disabled = hasDisabled && !hasActive
+
 		res.Skills = append(res.Skills, sk)
 	}
 	sort.Slice(res.Skills, func(i, j int) bool {
@@ -121,7 +134,7 @@ func Run(cwd string) (model.ScanResult, error) {
 
 func hasNonCanonicalObservation(sk *model.Skill) bool {
 	for _, observed := range sk.ObservedPaths {
-		if observed.Status != model.StatusCanonical {
+		if observed.Status != model.StatusCanonical && observed.Status != model.StatusDisabled {
 			return true
 		}
 	}
@@ -163,7 +176,7 @@ func skillVisibility(sk *model.Skill, states []model.AgentState) []model.SkillVi
 	for _, state := range states {
 		item := model.SkillVisibility{Agent: state.Name, Display: state.Display}
 		if observed, ok := observedForAgent(sk, state.Name); ok {
-			item.Visible = observed.Status != model.StatusBrokenSymlink
+			item.Visible = observed.Status != model.StatusBrokenSymlink && observed.Status != model.StatusDisabled
 			item.Path = observed.Path
 			item.Status = observed.Status
 			switch observed.Status {
@@ -179,6 +192,8 @@ func skillVisibility(sk *model.Skill, states []model.AgentState) []model.SkillVi
 				item.Reason = "visible_via_copy"
 			case model.StatusBrokenSymlink:
 				item.Reason = "broken_symlink"
+			case model.StatusDisabled:
+				item.Reason = "disabled"
 			default:
 				item.Reason = "visible"
 			}
@@ -209,6 +224,69 @@ func observedForAgent(sk *model.Skill, agent string) (model.ObservedPath, bool) 
 		}
 	}
 	return model.ObservedPath{}, false
+}
+
+func scanDisabledLocation(loc agents.Location, skills map[string]*model.Skill) {
+	disabledRoot := filepath.Join(loc.Root, ".lazyskills-disabled")
+	entries, err := os.ReadDir(disabledRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		path := filepath.Join(disabledRoot, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		observed := model.ObservedPath{
+			Path:       path,
+			Scope:      loc.Scope,
+			Agent:      loc.AgentName,
+			Status:     model.StatusDisabled,
+			TargetPath: filepath.Join(loc.Root, entry.Name()),
+		}
+		parseDir := path
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(path)
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			if st, err := os.Stat(path); err != nil || !st.IsDir() {
+				sk := ensureSkill(skills, loc.Scope, entry.Name(), entry.Name(), "")
+				addObservedPath(sk, observed)
+				sk.AddHealthIssue(model.HealthIssue{Type: "broken_symlink", Severity: "error", Message: "disabled skill path is a broken symlink", Path: path})
+				continue
+			}
+			parseDir = path
+		} else if !info.IsDir() {
+			continue
+		}
+
+		skillFile := filepath.Join(parseDir, "SKILL.md")
+		doc, err := frontmatter.ParseFile(skillFile)
+		if err != nil {
+			sk := ensureSkill(skills, loc.Scope, entry.Name(), entry.Name(), "")
+			addObservedPath(sk, observed)
+			issueType := "invalid_frontmatter"
+			if errors.Is(err, os.ErrNotExist) {
+				issueType = "missing_skill_md"
+			}
+			sk.AddHealthIssue(model.HealthIssue{Type: issueType, Severity: "error", Message: fmt.Sprintf("invalid SKILL.md in disabled shelf: %v", err), Path: skillFile})
+			continue
+		}
+
+		sk := ensureSkill(skills, loc.Scope, entry.Name(), doc.Name, doc.Description)
+		if sk.SkillPath == "" {
+			sk.SkillPath = skillFile
+		}
+		if sk.Preview == "" {
+			sk.Preview = doc.Raw
+		}
+		addObservedPath(sk, observed)
+	}
 }
 
 func scanLocation(loc agents.Location, skills map[string]*model.Skill) {

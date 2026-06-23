@@ -232,18 +232,41 @@ func (m *appModel) selectCurrentSourceGroup() {
 	if group == "" {
 		return
 	}
-	if m.selectedKeys == nil {
-		m.selectedKeys = map[string]bool{}
-	}
-	changed := false
+	var groupSkills []*model.Skill
 	items := m.filteredSkills()
 	for _, skill := range items {
 		if listGroupLabel(skill) == group {
-			m.selectedKeys[skillKey(skill)] = true
-			changed = true
+			groupSkills = append(groupSkills, skill)
 		}
 	}
-	if !changed && len(m.selectedKeys) == 0 {
+	if len(groupSkills) == 0 {
+		return
+	}
+
+	allSelected := true
+	for _, skill := range groupSkills {
+		if !m.isSelected(skill) {
+			allSelected = false
+			break
+		}
+	}
+	if allSelected {
+		for _, skill := range groupSkills {
+			delete(m.selectedKeys, skillKey(skill))
+		}
+		if len(m.selectedKeys) == 0 {
+			m.selectedKeys = nil
+		}
+		return
+	}
+
+	if m.selectedKeys == nil {
+		m.selectedKeys = map[string]bool{}
+	}
+	for _, skill := range groupSkills {
+		m.selectedKeys[skillKey(skill)] = true
+	}
+	if len(m.selectedKeys) == 0 {
 		m.selectedKeys = nil
 	}
 }
@@ -331,6 +354,7 @@ func (m appModel) sourceActions(group string) []actions.CommandPreview {
 			previews[i].ConfirmValue = group
 		}
 	}
+	previews = append(m.sourceEnableDisableActions(skills), previews...)
 
 	discoverable, reason := m.isSourceDiscoverable(group)
 

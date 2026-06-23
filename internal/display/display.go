@@ -20,6 +20,7 @@ type SkillView struct {
 	GlobalLock    *compat.GlobalLockDisplay
 	HealthIssues  []HealthIssueView
 	Preview       string
+	Disabled      bool
 }
 
 type ObservedPathView struct {
@@ -56,6 +57,7 @@ func Skill(sk *model.Skill) SkillView {
 		Scope:         compat.SanitizeMetadata(string(sk.Scope)),
 		CanonicalPath: compat.SanitizeMetadata(sk.CanonicalPath),
 		SkillPath:     compat.SanitizeMetadata(sk.SkillPath),
+		Disabled:      sk.Disabled,
 	}
 	for _, p := range sk.ObservedPaths {
 		view.Observed = append(view.Observed, ObservedPathView{

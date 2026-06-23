@@ -16,6 +16,7 @@ const (
 	StatusSymlink       Status = "symlink"
 	StatusCopy          Status = "copy"
 	StatusBrokenSymlink Status = "broken_symlink"
+	StatusDisabled      Status = "disabled"
 )
 
 // ObservedPath represents one location on disk where this skill was found.
@@ -116,6 +117,7 @@ type Skill struct {
 	LocalLock     *LocalLockEntry   `json:"local_lock,omitempty"`
 	GlobalLock    *GlobalLockEntry  `json:"global_lock,omitempty"`
 	HealthIssues  []HealthIssue     `json:"health_issues"`
+	Disabled      bool              `json:"disabled"`
 }
 
 // ToolStatus represents the location and status of a development tool.

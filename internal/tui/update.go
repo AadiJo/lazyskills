@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -297,6 +299,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.startAction()
 			case "o":
 				return m.startActionByID("open_skill")
+			case "e":
+				return m.startToggleAction()
 			case "u":
 				actionID := preferredUpdateActionID(m.selectedCount())
 				if m.modalSource != "" {
@@ -384,6 +388,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			rows := m.visibleRows()
 			if len(rows) > 0 && m.selected < len(rows) && !rows[m.selected].isHeader {
 				return m.startCurrentSkillActionByID("open_skill")
+			}
+		case "e":
+			rows := m.visibleRows()
+			if len(rows) > 0 && m.selected < len(rows) {
+				return m.startToggleAction()
 			}
 		case "u":
 			rows := m.visibleRows()
@@ -578,7 +587,7 @@ func (m appModel) currentActions() []actions.CommandPreview {
 			if child.isAvailable {
 				return actions.ForAvailableSkill(m.modalSource, child.discoveredSkill.Name)
 			}
-			return actions.ForSkill(child.skill)
+			return m.appendEnableDisableActions(actions.ForSkill(child.skill), child.skill)
 		}
 	}
 	selected := m.selectedSkills()
@@ -593,7 +602,7 @@ func (m appModel) currentActions() []actions.CommandPreview {
 	if row.isHeader {
 		return m.sourceActions(row.groupName)
 	}
-	return actions.ForSkill(row.skill)
+	return m.appendEnableDisableActions(actions.ForSkill(row.skill), row.skill)
 }
 
 func (m appModel) startAction() (tea.Model, tea.Cmd) {
@@ -622,6 +631,17 @@ func (m appModel) startActionByID(id string) (tea.Model, tea.Cmd) {
 	}
 	for i, action := range m.currentActions() {
 		if action.ID == id {
+			m.action = i
+			m.commands = false
+			return m.startAction()
+		}
+	}
+	return m, nil
+}
+
+func (m appModel) startToggleAction() (tea.Model, tea.Cmd) {
+	for i, action := range m.currentActions() {
+		if (action.ID == "enable_skill" || action.ID == "disable_skill") && action.Available {
 			m.action = i
 			m.commands = false
 			return m.startAction()
@@ -763,6 +783,104 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.actionResult = nil
 		return m.startDiscovery(action.ConfirmValue, true)
 	}
+	if action.Exec.Internal == "enable_skill" || action.Exec.Internal == "disable_skill" {
+		m.commands = false
+		m.confirming = false
+		m.confirmInput = ""
+		m.confirmError = ""
+		m.actionResult = nil
+
+		type moveItem struct {
+			src, dest string
+		}
+		var plan []moveItem
+		seenSrc := map[string]bool{}
+
+		if action.Exec.Internal == "disable_skill" {
+			for _, path := range action.Exec.Args {
+				src := path
+				dest := filepath.Join(filepath.Dir(src), ".lazyskills-disabled", filepath.Base(src))
+				if !seenSrc[src] {
+					seenSrc[src] = true
+					plan = append(plan, moveItem{src: src, dest: dest})
+				}
+			}
+		} else { // enable_skill
+			for i := 0; i < len(action.Exec.Args); i += 2 {
+				if i+1 >= len(action.Exec.Args) {
+					break
+				}
+				src := action.Exec.Args[i]
+				dest := action.Exec.Args[i+1]
+				if !seenSrc[src] {
+					seenSrc[src] = true
+					plan = append(plan, moveItem{src: src, dest: dest})
+				}
+			}
+		}
+
+		// Preflight validation
+		var errs []string
+		for _, item := range plan {
+			// Check if source exists
+			_, err := os.Lstat(item.src)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("source path does not exist: %s", item.src))
+				continue
+			}
+
+			// Destination must not exist
+			if _, err := os.Lstat(item.dest); err == nil || !os.IsNotExist(err) {
+				errs = append(errs, fmt.Sprintf("destination already exists: %s", item.dest))
+				continue
+			}
+
+			// Parent directory check
+			parent := filepath.Dir(item.dest)
+			parentInfo, err := os.Stat(parent)
+			if err == nil {
+				if !parentInfo.IsDir() {
+					errs = append(errs, fmt.Sprintf("parent of destination is not a directory: %s", parent))
+				}
+			} else if !os.IsNotExist(err) {
+				errs = append(errs, fmt.Sprintf("failed to check parent directory %s: %v", parent, err))
+			}
+		}
+
+		succeededMoves := 0
+		if len(errs) == 0 {
+			// Execution
+			for _, item := range plan {
+				parent := filepath.Dir(item.dest)
+				if err := os.MkdirAll(parent, 0755); err != nil {
+					errs = append(errs, fmt.Sprintf("failed to create directory %s: %v", parent, err))
+					break
+				}
+				if err := os.Rename(item.src, item.dest); err != nil {
+					errs = append(errs, fmt.Sprintf("failed to move %s to %s: %v", item.src, item.dest, err))
+					break
+				}
+				succeededMoves++
+			}
+		}
+
+		if len(errs) > 0 {
+			m.actionResult = &runner.Result{
+				Program:  action.Exec.Internal,
+				Args:     action.Exec.Args,
+				ExitCode: -1,
+				Err:      compat.SanitizeMetadata(strings.Join(errs, "; ")),
+			}
+			m.syncViewport()
+			if succeededMoves > 0 {
+				return m, loadSnapshot(m.cwd)
+			}
+			return m, nil
+		}
+
+		// Success: rescan
+		return m, loadSnapshot(m.cwd)
+	}
 	if action.Exec.Internal == "prune_project_lock" || action.Exec.Internal == "prune_global_lock" {
 		m.commands = false
 		m.confirming = false
@@ -872,4 +990,257 @@ func (m appModel) runBatch(batch []actions.ExecSpec) (runner.Result, bool) {
 		lines = append(lines, prefix+" ok")
 	}
 	return runner.Result{Program: "bulk", Cwd: m.cwd, ExitCode: 0, Stdout: strings.Join(lines, "\n")}, false
+}
+
+func (m appModel) appendEnableDisableActions(previews []actions.CommandPreview, sk *model.Skill) []actions.CommandPreview {
+	if sk == nil {
+		return previews
+	}
+	toggleActions := []actions.CommandPreview{}
+	if m.agent != "" {
+		var activePaths []string
+		var disabledPaths []string
+		for _, obs := range sk.ObservedPaths {
+			if obs.Agent == m.agent {
+				if obs.Status == model.StatusDisabled {
+					disabledPaths = append(disabledPaths, obs.Path, obs.TargetPath)
+				} else {
+					activePaths = append(activePaths, obs.Path)
+				}
+			}
+		}
+
+		if len(activePaths) > 0 {
+			for _, path := range activePaths {
+				sharingAgents := []string{}
+				for _, other := range sk.ObservedPaths {
+					if other.Path == path {
+						sharingAgents = append(sharingAgents, other.Agent)
+					}
+				}
+				if len(sharingAgents) > 1 {
+					reason := fmt.Sprintf("This path is shared by multiple agents (%s). Use scope-level disable instead.", strings.Join(sharingAgents, ", "))
+					toggleActions = append(toggleActions, actions.CommandPreview{
+						ID:          "disable_skill",
+						Title:       fmt.Sprintf("Disable skill for agent %s", m.agentLabel()),
+						Description: "This skill cannot be disabled for a single agent because the root directory is shared.",
+						Available:   false,
+						Reason:      reason,
+					})
+				} else {
+					toggleActions = append(toggleActions, actions.CommandPreview{
+						ID:          "disable_skill",
+						Title:       fmt.Sprintf("Disable skill for agent %s", m.agentLabel()),
+						Description: fmt.Sprintf("Disable this skill for %s by moving it to the disabled shelf.", m.agentLabel()),
+						Command:     "disable skill for agent " + m.agentLabel(),
+						Exec: actions.ExecSpec{
+							Internal: "disable_skill",
+							Args:     []string{path},
+						},
+						Mutates:   true,
+						Available: true,
+					})
+				}
+			}
+		}
+
+		if len(disabledPaths) > 0 {
+			for i := 0; i < len(disabledPaths); i += 2 {
+				src := disabledPaths[i]
+				dest := disabledPaths[i+1]
+
+				sharingAgents := []string{}
+				for _, other := range sk.ObservedPaths {
+					if other.Path == src {
+						sharingAgents = append(sharingAgents, other.Agent)
+					}
+				}
+
+				if len(sharingAgents) > 1 {
+					reason := fmt.Sprintf("This path is shared by multiple agents (%s). Use scope-level enable instead.", strings.Join(sharingAgents, ", "))
+					toggleActions = append(toggleActions, actions.CommandPreview{
+						ID:          "enable_skill",
+						Title:       fmt.Sprintf("Enable skill for agent %s", m.agentLabel()),
+						Description: "This skill cannot be enabled for a single agent because the disabled directory is shared.",
+						Available:   false,
+						Reason:      reason,
+					})
+				} else {
+					toggleActions = append(toggleActions, actions.CommandPreview{
+						ID:          "enable_skill",
+						Title:       fmt.Sprintf("Enable skill for agent %s", m.agentLabel()),
+						Description: fmt.Sprintf("Enable this skill for %s by moving it back from the disabled shelf.", m.agentLabel()),
+						Command:     "enable skill for agent " + m.agentLabel(),
+						Exec: actions.ExecSpec{
+							Internal: "enable_skill",
+							Args:     []string{src, dest},
+						},
+						Mutates:   true,
+						Available: true,
+					})
+				}
+			}
+		}
+
+	} else {
+		var activePaths []string
+		seenActive := map[string]bool{}
+		var disabledPaths []string
+		seenDisabled := map[string]bool{}
+		for _, obs := range sk.ObservedPaths {
+			if obs.Scope == sk.Scope {
+				if obs.Status == model.StatusDisabled {
+					if !seenDisabled[obs.Path] {
+						seenDisabled[obs.Path] = true
+						disabledPaths = append(disabledPaths, obs.Path, obs.TargetPath)
+					}
+				} else {
+					if !seenActive[obs.Path] {
+						seenActive[obs.Path] = true
+						activePaths = append(activePaths, obs.Path)
+					}
+				}
+			}
+		}
+
+		if len(activePaths) > 0 {
+			toggleActions = append(toggleActions, actions.CommandPreview{
+				ID:          "disable_skill",
+				Title:       fmt.Sprintf("Disable skill (scope: %s)", sk.Scope),
+				Description: fmt.Sprintf("Disable this skill across all agent roots in the %s scope.", sk.Scope),
+				Command:     fmt.Sprintf("disable skill (scope: %s)", sk.Scope),
+				Exec: actions.ExecSpec{
+					Internal: "disable_skill",
+					Args:     activePaths,
+				},
+				Mutates:   true,
+				Available: true,
+			})
+		}
+
+		if len(disabledPaths) > 0 {
+			toggleActions = append(toggleActions, actions.CommandPreview{
+				ID:          "enable_skill",
+				Title:       fmt.Sprintf("Enable skill (scope: %s)", sk.Scope),
+				Description: fmt.Sprintf("Enable this skill across all agent roots in the %s scope.", sk.Scope),
+				Command:     fmt.Sprintf("enable skill (scope: %s)", sk.Scope),
+				Exec: actions.ExecSpec{
+					Internal: "enable_skill",
+					Args:     disabledPaths,
+				},
+				Mutates:   true,
+				Available: true,
+			})
+		}
+	}
+
+	return insertToggleActions(previews, toggleActions)
+}
+
+func (m appModel) sourceEnableDisableActions(skills []*model.Skill) []actions.CommandPreview {
+	if len(skills) == 0 {
+		return nil
+	}
+	var activePaths []string
+	seenActive := map[string]bool{}
+	var disabledPaths []string
+	seenDisabled := map[string]bool{}
+	sharedActive, sharedDisabled := map[string][]string{}, map[string][]string{}
+
+	for _, sk := range skills {
+		for _, obs := range sk.ObservedPaths {
+			if m.agent != "" && obs.Agent != m.agent {
+				continue
+			}
+			if m.agent != "" {
+				sharing := sharingAgentsForPath(sk, obs.Path)
+				if len(sharing) > 1 {
+					if obs.Status == model.StatusDisabled {
+						sharedDisabled[obs.Path] = sharing
+					} else {
+						sharedActive[obs.Path] = sharing
+					}
+					continue
+				}
+			}
+
+			if obs.Status == model.StatusDisabled {
+				if !seenDisabled[obs.Path] {
+					seenDisabled[obs.Path] = true
+					disabledPaths = append(disabledPaths, obs.Path, obs.TargetPath)
+				}
+				continue
+			}
+			if !seenActive[obs.Path] {
+				seenActive[obs.Path] = true
+				activePaths = append(activePaths, obs.Path)
+			}
+		}
+	}
+
+	var out []actions.CommandPreview
+	if len(activePaths) > 0 {
+		title := "Disable source skills"
+		desc := "Disable all enabled skills in this source."
+		cmd := "disable source skills"
+		if m.agent != "" {
+			title = fmt.Sprintf("Disable source skills for agent %s", m.agentLabel())
+			desc = fmt.Sprintf("Disable enabled skills in this source for %s.", m.agentLabel())
+			cmd = "disable source skills for agent " + m.agentLabel()
+		}
+		out = append(out, actions.CommandPreview{ID: "disable_skill", Title: title, Description: desc, Command: cmd, Exec: actions.ExecSpec{Internal: "disable_skill", Args: activePaths}, Mutates: true, Available: true})
+	} else if len(sharedActive) > 0 {
+		out = append(out, actions.CommandPreview{ID: "disable_skill", Title: fmt.Sprintf("Disable source skills for agent %s", m.agentLabel()), Description: "This source cannot be disabled for a single agent because one or more directories are shared.", Available: false, Reason: sharedSourceReason(sharedActive, "disable")})
+	}
+
+	if len(disabledPaths) > 0 {
+		title := "Enable source skills"
+		desc := "Enable all disabled skills in this source."
+		cmd := "enable source skills"
+		if m.agent != "" {
+			title = fmt.Sprintf("Enable source skills for agent %s", m.agentLabel())
+			desc = fmt.Sprintf("Enable disabled skills in this source for %s.", m.agentLabel())
+			cmd = "enable source skills for agent " + m.agentLabel()
+		}
+		out = append(out, actions.CommandPreview{ID: "enable_skill", Title: title, Description: desc, Command: cmd, Exec: actions.ExecSpec{Internal: "enable_skill", Args: disabledPaths}, Mutates: true, Available: true})
+	} else if len(sharedDisabled) > 0 {
+		out = append(out, actions.CommandPreview{ID: "enable_skill", Title: fmt.Sprintf("Enable source skills for agent %s", m.agentLabel()), Description: "This source cannot be enabled for a single agent because one or more disabled directories are shared.", Available: false, Reason: sharedSourceReason(sharedDisabled, "enable")})
+	}
+
+	return out
+}
+
+func sharingAgentsForPath(sk *model.Skill, path string) []string {
+	var agents []string
+	for _, other := range sk.ObservedPaths {
+		if other.Path == path {
+			agents = append(agents, other.Agent)
+		}
+	}
+	return agents
+}
+
+func sharedSourceReason(shared map[string][]string, verb string) string {
+	for _, agents := range shared {
+		return fmt.Sprintf("This path is shared by multiple agents (%s). Use scope-level %s instead.", strings.Join(agents, ", "), verb)
+	}
+	return "One or more paths are shared by multiple agents. Use scope-level " + verb + " instead."
+}
+
+func insertToggleActions(previews, toggleActions []actions.CommandPreview) []actions.CommandPreview {
+	if len(toggleActions) == 0 {
+		return previews
+	}
+	insertAt := len(previews)
+	for i, preview := range previews {
+		if preview.ID == "open_skill" {
+			insertAt = i + 1
+			break
+		}
+	}
+	out := make([]actions.CommandPreview, 0, len(previews)+len(toggleActions))
+	out = append(out, previews[:insertAt]...)
+	out = append(out, toggleActions...)
+	out = append(out, previews[insertAt:]...)
+	return out
 }

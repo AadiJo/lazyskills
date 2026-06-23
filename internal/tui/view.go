@@ -226,11 +226,21 @@ func (m appModel) listPane(height, width int) string {
 				severity = fmt.Sprintf(" ▲%d", issueWarnings)
 			}
 
-			// Reserve room for the trailing tags so a long name truncates first,
-			// keeping scope/agent/severity badges visible. lipgloss.Width counts
-			// display columns (not bytes), so width-1 glyphs like ▲ need no
-			// spacing crutch (the old ⚠ badge padded with a space to render).
+			isEffectivelyDisabled := row.skill.Disabled
+			if m.agent != "" {
+				isEffectivelyDisabled = false
+				for _, obs := range row.skill.ObservedPaths {
+					if obs.Agent == m.agent && obs.Status == model.StatusDisabled {
+						isEffectivelyDisabled = true
+						break
+					}
+				}
+			}
+
 			tail := " " + scopeTag + agentBadge + severity
+			if isEffectivelyDisabled {
+				tail += " [disabled]"
+			}
 			nameCore := truncate(mark+view.Name, max(1, width-lipgloss.Width(tail)))
 
 			switch {
@@ -238,6 +248,12 @@ func (m appModel) listPane(height, width int) string {
 				line = selectedStyle.Render(nameCore + tail)
 			case issueErrors > 0:
 				line = errorStyle.Render(nameCore + tail)
+			case isEffectivelyDisabled:
+				line = dimStyle.Render(nameCore+" "+scopeTag) + agentBadge
+				if issueWarnings > 0 {
+					line += warningStyle.Render(severity)
+				}
+				line += " " + dimStyle.Render("[disabled]")
 			default:
 				line = nameCore + " " + scopeStyle(view.Scope).Render(scopeTag) + agentBadge
 				if issueWarnings > 0 {
@@ -461,8 +477,25 @@ func (m appModel) metadataLinesForRows(rows []skillsRow, width int) []string {
 	}
 
 	view := display.Skill(row.skill)
+	isEffectivelyDisabled := row.skill.Disabled
+	if m.agent != "" {
+		isEffectivelyDisabled = false
+		for _, obs := range row.skill.ObservedPaths {
+			if obs.Agent == m.agent && obs.Status == model.StatusDisabled {
+				isEffectivelyDisabled = true
+				break
+			}
+		}
+	}
+	statusVal := "enabled"
+	if isEffectivelyDisabled {
+		statusVal = errorStyle.Render("disabled")
+	} else {
+		statusVal = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("enabled")
+	}
 	lines := []string{
 		formatMetaLine("Scope:", styledScopeBadge(string(view.Scope)), width),
+		formatMetaLine("Status:", statusVal, width),
 	}
 	if view.Description != "" {
 		lines = append(lines, formatMetaLine("Description:", dimStyle.Render(view.Description), width))
@@ -975,6 +1008,8 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 				statusText = "available (copied)"
 			case "broken_symlink":
 				statusText = "broken link"
+			case "disabled":
+				statusText = "disabled"
 			case "unsupported_global":
 				statusText = "global unsupported"
 			case "agent_not_detected":
@@ -987,7 +1022,7 @@ func (m appModel) visibilitySummary(view display.SkillView, width int) []string 
 			var statusStyled string
 			if visibility.Visible {
 				statusStyled = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render(statusText)
-			} else if visibility.Reason == "broken_symlink" {
+			} else if visibility.Reason == "broken_symlink" || visibility.Reason == "disabled" {
 				statusStyled = errorStyle.Render(statusText)
 			} else {
 				statusStyled = dimStyle.Render(statusText)
@@ -1139,11 +1174,6 @@ func (m appModel) commandPreview(sk *model.Skill, width int) []string {
 			continue
 		}
 		titleText := compat.SanitizeMetadata(preview.Title)
-		if preview.Dangerous {
-			titleText += " — removes skills"
-		} else if preview.Mutates {
-			titleText += " — changes skills"
-		}
 		if i == m.action {
 			// Selected Action Highlight Block (entire block has same purple background)
 			titleLine := activeActionTitleStyle.Render(padRight(selector+titleText, width))
@@ -1210,25 +1240,25 @@ func (m appModel) footerText(width int) string {
 	} else if m.detailModal {
 		text = "↑/↓ scroll · o edit · c commands · esc/q close"
 	} else if m.commands {
-		text = "↑/↓ choose · enter run · esc close"
+		text = "↑/↓ choose · enter run · e enable/disable · esc close"
 	} else if m.helpOpen {
 		text = "esc/q/? close help"
 	} else if m.focus == focusMetadata {
-		text = "↑/↓ scroll metadata · enter open · c commands · o edit · ? help"
+		text = "↑/↓ scroll metadata · enter open · c commands · e enable/disable · ? help"
 	} else if m.focus == focusPreview {
-		text = "↑/↓ scroll preview · enter open · c commands · o edit · ? help"
+		text = "↑/↓ scroll preview · enter open · c commands · e enable/disable · ? help"
 	} else {
 		// focusSkills
 		rows := m.visibleRows()
 		if len(rows) > 0 && m.selected >= 0 && m.selected < len(rows) {
 			row := rows[m.selected]
 			if row.isHeader {
-				text = "enter browse · d scan · c source actions · h/- collapse · l/+ expand · ? help"
+				text = "enter browse · e enable/disable source · d scan · c actions · ? help"
 			} else {
-				text = "enter open · c skill actions · o edit · u update · x remove · ? help"
+				text = "enter open · e enable/disable · c actions · u update · x remove · ? help"
 			}
 		} else {
-			text = "enter open · c skill actions · o edit · u update · x remove · ? help"
+			text = "enter open · e enable/disable · c actions · u update · x remove · ? help"
 		}
 	}
 	return dimStyle.Render(truncate(text, width))
@@ -1263,8 +1293,9 @@ func (m appModel) helpModalOverlay(layout appLayout) string {
 		sectionHeaderStyle.Render("Actions & Selection:"),
 		"  enter           Open detail modal for the selected source or skill",
 		"  space           Mark / unmark selected skill for bulk actions",
-		"  s               Mark all skills in the current source group",
+		"  s               Mark / unmark skills in the current source group",
 		"  o               Open selected skill directly in editor",
+		"  e               Enable / disable selected skill or source group",
 		"  c               Open command picker menu",
 		"  u / x           Quick reinstall-update / remove for selection",
 		"  d               Check local or remote source for available skills (Source row)",

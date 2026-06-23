@@ -646,6 +646,11 @@ func TestSourceMarkSelectsCurrentSource(t *testing.T) {
 	if next.selectedCount() != 4 || !next.isSelected(next.result.Skills[0]) || !next.isSelected(next.result.Skills[1]) || !next.isSelected(next.result.Skills[2]) || !next.isSelected(next.result.Skills[3]) || next.isSelected(next.result.Skills[4]) {
 		t.Fatalf("expected source mark to select all skills from owner/repo only, selected=%#v", next.selectedKeys)
 	}
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	next = updated.(appModel)
+	if next.selectedCount() != 0 {
+		t.Fatalf("expected second source mark to unselect marked source skills, selected=%#v", next.selectedKeys)
+	}
 }
 
 func TestSourceMarkOnlySelectsFilteredSkills(t *testing.T) {
@@ -1606,14 +1611,14 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 
 	// 1. Default footer (Skills focused)
 	outDefault := m.View()
-	if !strings.Contains(outDefault, "enter open · c skill actions") {
+	if !strings.Contains(outDefault, "enter open · e enable/disable · c actions") {
 		t.Fatalf("expected default footer in View, got:\n%s", outDefault)
 	}
 
 	// 1b. Source row selected footer
 	m.selected = 0
 	outHeaderFooter := m.View()
-	if !strings.Contains(outHeaderFooter, "enter browse · d scan · c source actions") {
+	if !strings.Contains(outHeaderFooter, "enter browse · e enable/disable source") {
 		t.Fatalf("expected source group footer in View, got:\n%s", outHeaderFooter)
 	}
 	m.selected = 1
@@ -2622,5 +2627,173 @@ func TestModalCommandPickerUXWithBulkSelection(t *testing.T) {
 		}
 	} else {
 		t.Fatal("expected remove action to trigger confirmation overlay")
+	}
+}
+
+func TestTuiEnableDisableActions(t *testing.T) {
+	tempDir := t.TempDir()
+	skillDir := filepath.Join(tempDir, "my-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillFile, []byte("---\nname: my-skill\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sk := &model.Skill{
+		Name:  "my-skill",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{
+				Path:   skillDir,
+				Scope:  model.ScopeProject,
+				Agent:  "aider-desk",
+				Status: model.StatusCopy,
+			},
+		},
+	}
+
+	m := appModel{
+		cwd:   tempDir,
+		agent: "aider-desk",
+	}
+
+	acts := m.appendEnableDisableActions(nil, sk)
+	if len(acts) != 1 || acts[0].ID != "disable_skill" {
+		t.Fatalf("expected 1 disable action, got %+v", acts)
+	}
+	disableAction := acts[0]
+
+	_, cmd := m.executeAction(disableAction)
+	if cmd == nil {
+		t.Fatal("expected loadSnapshot cmd to be returned on success")
+	}
+
+	disabledPath := filepath.Join(tempDir, ".lazyskills-disabled", "my-skill")
+	if _, err := os.Stat(disabledPath); err != nil {
+		t.Fatalf("expected disabled folder to exist at %s, got error: %v", disabledPath, err)
+	}
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Fatalf("expected active folder at %s to be gone, got error: %v", skillDir, err)
+	}
+
+	sk.ObservedPaths[0].Status = model.StatusDisabled
+	sk.ObservedPaths[0].Path = disabledPath
+	sk.ObservedPaths[0].TargetPath = skillDir
+
+	acts = m.appendEnableDisableActions(nil, sk)
+	if len(acts) != 1 || acts[0].ID != "enable_skill" {
+		t.Fatalf("expected 1 enable action, got %+v", acts)
+	}
+	enableAction := acts[0]
+
+	_, cmd = m.executeAction(enableAction)
+	if cmd == nil {
+		t.Fatal("expected loadSnapshot cmd to be returned on success")
+	}
+
+	if _, err := os.Stat(skillDir); err != nil {
+		t.Fatalf("expected active folder to exist at %s, got error: %v", skillDir, err)
+	}
+	if _, err := os.Stat(disabledPath); !os.IsNotExist(err) {
+		t.Fatalf("expected disabled folder at %s to be gone, got error: %v", disabledPath, err)
+	}
+}
+
+func TestTuiEnableDisableEdgeCases(t *testing.T) {
+	tempDir := t.TempDir()
+	skillDir := filepath.Join(tempDir, "my-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	sk := &model.Skill{
+		Name:  "my-skill",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{
+				Path:   skillDir,
+				Scope:  model.ScopeProject,
+				Agent:  "aider-desk",
+				Status: model.StatusCopy,
+			},
+			{
+				Path:   skillDir,
+				Scope:  model.ScopeProject,
+				Agent:  "amp",
+				Status: model.StatusCopy,
+			},
+		},
+	}
+
+	// 1. Guard check: per-agent disable blocked when path is shared by multiple agents
+	m := appModel{
+		cwd:   tempDir,
+		agent: "aider-desk",
+	}
+	acts := m.appendEnableDisableActions(nil, sk)
+	if len(acts) != 1 || acts[0].ID != "disable_skill" || acts[0].Available {
+		t.Fatalf("expected disable action to be unavailable for shared path, got: %+v", acts)
+	}
+	if !strings.Contains(acts[0].Reason, "shared by multiple agents") {
+		t.Fatalf("expected shared reason, got %q", acts[0].Reason)
+	}
+
+	// 2. Guard check: per-agent enable blocked when disabled path is shared by multiple agents
+	disabledPath := filepath.Join(tempDir, ".lazyskills-disabled", "my-skill")
+	skDisabled := &model.Skill{
+		Name:  "my-skill",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{
+				Path:       disabledPath,
+				TargetPath: skillDir,
+				Scope:      model.ScopeProject,
+				Agent:      "aider-desk",
+				Status:     model.StatusDisabled,
+			},
+			{
+				Path:       disabledPath,
+				TargetPath: skillDir,
+				Scope:      model.ScopeProject,
+				Agent:      "amp",
+				Status:     model.StatusDisabled,
+			},
+		},
+	}
+	acts = m.appendEnableDisableActions(nil, skDisabled)
+	if len(acts) != 1 || acts[0].ID != "enable_skill" || acts[0].Available {
+		t.Fatalf("expected enable action to be unavailable for shared path, got: %+v", acts)
+	}
+	if !strings.Contains(acts[0].Reason, "shared by multiple agents") {
+		t.Fatalf("expected shared reason, got %q", acts[0].Reason)
+	}
+
+	// 3. Deduplication check: scope-level disable has no duplicates in Args
+	mNoAgent := appModel{
+		cwd: tempDir,
+	}
+	acts = mNoAgent.appendEnableDisableActions(nil, sk)
+	if len(acts) != 1 || acts[0].ID != "disable_skill" {
+		t.Fatalf("expected 1 scope disable action, got %+v", acts)
+	}
+	if len(acts[0].Exec.Args) != 1 {
+		t.Fatalf("expected deduplicated args, got %+v", acts[0].Exec.Args)
+	}
+
+	// 4. Preflight validate dest already exists
+	destDir := filepath.Join(tempDir, ".lazyskills-disabled", "my-skill")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	disableAction := acts[0]
+	resModel, cmd := mNoAgent.executeAction(disableAction)
+	if cmd != nil {
+		t.Fatal("expected action to fail preflight (no cmd returned) when dest exists")
+	}
+	resAppModel := resModel.(appModel)
+	if resAppModel.actionResult == nil || !strings.Contains(resAppModel.actionResult.Err, "destination already exists") {
+		t.Fatalf("expected actionResult to carry destination already exists error, got: %+v", resAppModel.actionResult)
 	}
 }

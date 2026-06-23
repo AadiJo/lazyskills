@@ -536,3 +536,43 @@ func TestPreflightChecking(t *testing.T) {
 		t.Error("expected CanRunSkills to be false when npx exists but node is missing")
 	}
 }
+
+func TestScanDisabledSkills(t *testing.T) {
+	withHome(t)
+	cwd := t.TempDir()
+
+	// 1. Create a disabled skill inside project-local aider-desk agent root
+	disabledDir := filepath.Join(cwd, ".aider-desk", "skills", ".lazyskills-disabled", "review")
+	writeSkill(t, disabledDir, "Review", "Review code")
+
+	// Run scan
+	res, err := Run(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify we found the disabled skill
+	found := false
+	for _, sk := range res.Skills {
+		if sk.Name == "Review" {
+			found = true
+			if !sk.Disabled {
+				t.Errorf("expected skill 'Review' to be disabled, got %#v", sk)
+			}
+			if len(sk.ObservedPaths) != 1 {
+				t.Fatalf("expected 1 observed path, got %d", len(sk.ObservedPaths))
+			}
+			obs := sk.ObservedPaths[0]
+			if obs.Status != model.StatusDisabled {
+				t.Errorf("expected status 'disabled', got %s", obs.Status)
+			}
+			expectedTarget := filepath.Join(cwd, ".aider-desk", "skills", "review")
+			if obs.TargetPath != expectedTarget {
+				t.Errorf("expected target path %q, got %q", expectedTarget, obs.TargetPath)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected to find disabled skill 'Review'")
+	}
+}
