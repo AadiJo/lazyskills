@@ -11,6 +11,7 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/registry"
 	"github.com/alvinunreal/lazyskills/internal/runner"
 	"github.com/alvinunreal/lazyskills/internal/scan"
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
@@ -105,6 +106,17 @@ type appModel struct {
 	updatePlan                 *selfupdate.UpdatePlan
 	updatePlanErr              error
 	appUpdateModal             bool
+	updatingApp                bool
+	updateSuccess              bool
+	updateError                error
+	registryModal              bool
+	registryQuery              string
+	registryLoading            bool
+	registryResults            []registry.Skill
+	registrySelected           int
+	registryError              error
+	registryGeneration         int
+	registryFocusList          bool
 }
 
 type paneLayout struct {
@@ -184,6 +196,21 @@ type actionResultMsg struct {
 type updatePlanMsg struct {
 	plan *selfupdate.UpdatePlan
 	err  error
+}
+
+type appUpdateResultMsg struct {
+	err error
+}
+
+type registryDebounceMsg struct {
+	generation int
+	query      string
+}
+
+type registrySearchMsg struct {
+	generation int
+	results    []registry.Skill
+	err        error
 }
 
 func Run(cwd string) error {

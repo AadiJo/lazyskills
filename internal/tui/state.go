@@ -9,6 +9,7 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/registry"
 )
 
 func (m *appModel) syncViewport() {
@@ -607,4 +608,59 @@ func (m appModel) cachedSkillView(sk *model.Skill) display.SkillView {
 		}
 	}
 	return display.Skill(sk)
+}
+
+type RegistryMatchStatus int
+
+const (
+	StatusInstallable RegistryMatchStatus = iota
+	StatusInstalled
+	StatusSimilarInstalled
+)
+
+func (m appModel) checkRegistrySkillStatus(s registry.Skill) (RegistryMatchStatus, string) {
+	sSource := normalizeSource(s.Source)
+	sSlug := compat.NormalizeName(s.Slug)
+	sDisplay := compat.NormalizeName(s.DisplayName)
+
+	similarMatch := false
+	var matchingInstalledSkillName string
+
+	for _, sk := range m.result.Skills {
+		info := sourceInfo(sk)
+		instSource := normalizeSource(info.Source)
+		instName := compat.NormalizeName(sk.Name)
+
+		nameMatch := (instName == sSlug || instName == sDisplay)
+		sourceMatch := (instSource != "" && sSource != "" && instSource == sSource)
+
+		if sourceMatch && nameMatch {
+			return StatusInstalled, fmt.Sprintf("Already installed in catalog from this source as %s", sk.Name)
+		}
+		if nameMatch {
+			similarMatch = true
+			matchingInstalledSkillName = sk.Name
+		}
+	}
+
+	if similarMatch {
+		return StatusSimilarInstalled, matchingInstalledSkillName
+	}
+
+	return StatusInstallable, ""
+}
+
+func normalizeSource(src string) string {
+	src = strings.ToLower(strings.TrimSpace(src))
+	src = strings.TrimPrefix(src, "git+https://")
+	src = strings.TrimPrefix(src, "https://")
+	src = strings.TrimPrefix(src, "http://")
+	src = strings.TrimPrefix(src, "git@")   // for ssh URLs
+	src = strings.ReplaceAll(src, ":", "/") // normalize git@github.com:foo/bar
+	src = strings.TrimSuffix(src, ".git")
+	src = strings.TrimRight(src, "/")
+	for _, host := range []string{"github.com/", "gitlab.com/"} {
+		src = strings.TrimPrefix(src, host)
+	}
+	return src
 }
