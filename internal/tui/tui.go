@@ -56,52 +56,53 @@ type SourceDiscovery struct {
 }
 
 type appModel struct {
-	cwd                     string
-	result                  model.ScanResult
-	err                     error
-	selected                int
-	filter                  scopeFilter
-	agent                   string
-	search                  string
-	searching               bool
-	commands                bool
-	selectedKeys            map[string]bool
-	action                  int
-	confirming              bool
-	confirmInput            string
-	confirmError            string
-	running                 bool
-	runningTitle            string
-	actionResult            *runner.Result
-	width                   int
-	height                  int
-	viewport                viewport.Model
-	metadataViewport        viewport.Model
-	previewViewport         viewport.Model
-	detailsFocused          bool
-	detailModal             bool
-	helpOpen                bool
-	focus                   focusState
-	collapsedGroups         map[string]bool
-	discovery               map[string]SourceDiscovery
-	previewCache            map[previewCacheKey][]string
-	previewPending          bool
-	previewRendering        bool
-	previewGeneration       int
-	viewportSyncFingerprint string
-	skillSearchText         map[*model.Skill]string
-	skillViews              map[*model.Skill]*display.SkillView
-	cachedActions           []actions.CommandPreview
-	modalSelected           int
-	modalSource             string
-	pendingG                bool                    // saw a lone "g"; a second "g" jumps to top
-	pendingAction           *actions.CommandPreview // action awaiting confirm (decoupled from selection)
-	updatePlan              *selfupdate.UpdatePlan
-	updatePlanErr           error
-	appUpdateModal          bool
-	updatingApp             bool
-	updateSuccess           bool
-	updateError             error
+	cwd                        string
+	result                     model.ScanResult
+	err                        error
+	selected                   int
+	filter                     scopeFilter
+	agent                      string
+	search                     string
+	searching                  bool
+	commands                   bool
+	selectedKeys               map[string]bool
+	action                     int
+	confirming                 bool
+	confirmInput               string
+	confirmError               string
+	running                    bool
+	runningTitle               string
+	actionResult               *runner.Result
+	width                      int
+	height                     int
+	viewport                   viewport.Model
+	metadataViewport           viewport.Model
+	previewViewport            viewport.Model
+	detailsFocused             bool
+	detailModal                bool
+	helpOpen                   bool
+	focus                      focusState
+	collapsedGroups            map[string]bool
+	discovery                  map[string]SourceDiscovery
+	previewCache               map[previewCacheKey][]string
+	previewPending             bool
+	previewRendering           bool
+	previewRenderingGeneration int
+	previewGeneration          int
+	viewportSyncFingerprint    string
+	skillSearchText            map[*model.Skill]string
+	skillViews                 map[*model.Skill]*display.SkillView
+	cachedActions              []actions.CommandPreview
+	modalSelected              int
+	modalSource                string
+	pendingG                   bool                    // saw a lone "g"; a second "g" jumps to top
+	pendingAction              *actions.CommandPreview // action awaiting confirm (decoupled from selection)
+	updatePlan                 *selfupdate.UpdatePlan
+	updatePlanErr              error
+	appUpdateModal             bool
+	updatingApp                bool
+	updateSuccess              bool
+	updateError                error
 }
 
 type paneLayout struct {

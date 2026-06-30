@@ -53,6 +53,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewCache = make(map[previewCacheKey][]string)
 		m.previewPending = true // prevent syncViewport from blocking on glamour
 		m.previewRendering = false
+		m.previewRenderingGeneration = 0
 		m.previewGeneration++
 		sortSkills(m.result.Skills)
 		m.rebuildSkillSearchText()
@@ -81,7 +82,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Immediately start the initial preview render off the main thread
 		// so the 2-3s glamour/chroma cost doesn't block the first frame.
 		if cmd := m.dispatchPreviewRender(); cmd != nil {
-			m.previewRendering = true
+			m.markPreviewRendering()
 			return m, cmd
 		}
 		m.previewPending = false
@@ -121,7 +122,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation == m.previewGeneration {
 			m.previewPending = false
 			if cmd := m.dispatchPreviewRender(); cmd != nil {
-				m.previewRendering = true
+				m.markPreviewRendering()
 				return m, cmd
 			}
 			m.syncViewport()
@@ -133,13 +134,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		key := previewCacheKey{markdown: msg.markdown, width: msg.width}
 		m.previewCache[key] = append([]string(nil), msg.lines...)
-		if msg.generation == m.previewGeneration {
+		if msg.generation == m.previewRenderingGeneration {
 			m.previewRendering = false
+			m.previewRenderingGeneration = 0
 			// Re-dispatch if the current skill's preview width differs from the
 			// rendered width (e.g. the terminal was resized between dispatch and
 			// completion). This ensures we never block View on a cache miss.
 			if cmd := m.dispatchPreviewRender(); cmd != nil {
-				m.previewRendering = true
+				m.markPreviewRendering()
 				return m, cmd
 			}
 			m.syncViewport()
@@ -732,6 +734,11 @@ func schedulePreviewRefresh(generation int) tea.Cmd {
 	return tea.Tick(previewRefreshDelay, func(time.Time) tea.Msg {
 		return previewRefreshMsg{generation: generation}
 	})
+}
+
+func (m *appModel) markPreviewRendering() {
+	m.previewRendering = true
+	m.previewRenderingGeneration = m.previewGeneration
 }
 
 // dispatchPreviewRender checks whether the currently selected skill needs an

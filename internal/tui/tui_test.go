@@ -3099,16 +3099,14 @@ func TestPreviewRendererCacheConcurrency(t *testing.T) {
 }
 
 func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
-	// Initialize an appModel that triggers the check.
-	// We simulate that previewGeneration has advanced to 2, e.g. due to moving selection or reloading.
-	// previewRendering has been set to true already.
 	m := appModel{
-		width:             120,
-		height:            32,
-		selected:          0,
-		previewRendering:  true,
-		previewGeneration: 2,
-		previewCache:      make(map[previewCacheKey][]string),
+		width:                      120,
+		height:                     32,
+		selected:                   1,
+		previewRendering:           true,
+		previewRenderingGeneration: 1,
+		previewGeneration:          2,
+		previewCache:               make(map[previewCacheKey][]string),
 		result: model.ScanResult{
 			Skills: []*model.Skill{
 				{
@@ -3122,25 +3120,21 @@ func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
 	}
 	m.syncViewport()
 
-	// Capture the expected target width for layout calculations (which should be 68)
 	_, rightWidth, _, _ := m.getThreePaneLayout()
 	expectedWidth := max(1, rightWidth-4)
+	currentKey := previewCacheKey{markdown: "some preview text", width: expectedWidth}
 
-	// Simulate a stale previewRenderedMsg completing with generation 1 (before previewGeneration advanced)
 	staleMsg := previewRenderedMsg{
-		markdown:   "some preview text",
+		markdown:   "old preview text",
 		width:      expectedWidth,
 		lines:      []string{"stale lines content"},
 		generation: 1,
 	}
 
-	// Update the model with the stale message.
 	updatedModel, cmd := m.Update(staleMsg)
 	resM := updatedModel.(appModel)
 
-	// Since generation is stale:
-	// 1. It must store the cache entry (low-risk caching of even stale results)
-	staleKey := previewCacheKey{markdown: "some preview text", width: expectedWidth}
+	staleKey := previewCacheKey{markdown: "old preview text", width: expectedWidth}
 	lines, cached := resM.previewCache[staleKey]
 	if !cached {
 		t.Fatalf("expected stale render result to be cached in previewCache")
@@ -3148,18 +3142,22 @@ func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
 	if len(lines) != 1 || lines[0] != "stale lines content" {
 		t.Fatalf("expected cached lines to be 'stale lines content', got %v", lines)
 	}
+	if _, cached := resM.previewCache[currentKey]; cached {
+		t.Fatalf("did not expect current preview to be cached by stale completion")
+	}
 
-	// 2. It must NOT clear previewRendering (it remains true)
+	// The stale completion corresponded to the only in-flight render, so it must
+	// free the slot and dispatch a render for the current generation.
 	if !resM.previewRendering {
-		t.Fatalf("expected previewRendering to remain true for stale preview completion")
+		t.Fatalf("expected previewRendering to remain true for redispatched current render")
+	}
+	if resM.previewRenderingGeneration != 2 {
+		t.Fatalf("expected redispatched render generation 2, got %d", resM.previewRenderingGeneration)
+	}
+	if cmd == nil {
+		t.Fatalf("expected stale completion to dispatch current preview render")
 	}
 
-	// 3. It must not redispatch
-	if cmd != nil {
-		t.Fatalf("expected cmd to be nil for stale preview completion, got %v", cmd)
-	}
-
-	// Now simulate a current-generation previewRenderedMsg completion with generation 2
 	currentMsg := previewRenderedMsg{
 		markdown:   "some preview text",
 		width:      expectedWidth,
@@ -3167,27 +3165,45 @@ func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
 		generation: 2,
 	}
 
-	// Update the model with the current-generation message.
 	updatedModel2, cmd2 := resM.Update(currentMsg)
 	resM2 := updatedModel2.(appModel)
 
-	// Since generation matches current:
-	// 1. It stores the cache entry (replacing or adding it)
-	lines2, cached2 := resM2.previewCache[staleKey]
+	lines2, cached2 := resM2.previewCache[currentKey]
 	if !cached2 {
 		t.Fatalf("expected current render result to be cached in previewCache")
 	}
 	if len(lines2) != 1 || lines2[0] != "current lines content" {
 		t.Fatalf("expected cached lines to be 'current lines content', got %v", lines2)
 	}
-
-	// 2. It clears previewRendering (becomes false) since the layout matches and it's already cached
 	if resM2.previewRendering {
 		t.Fatalf("expected previewRendering to be cleared (false) for current-generation preview completion, got true")
 	}
-
-	// 3. It must not redispatch since the width matches and it's already cached
 	if cmd2 != nil {
 		t.Fatalf("expected cmd2 to be nil for current-generation preview completion, got %v", cmd2)
+	}
+}
+
+func TestTUIPreviewRenderIgnoresCompletionWhenNewerRenderInFlight(t *testing.T) {
+	m := appModel{
+		width:                      120,
+		height:                     32,
+		selected:                   1,
+		previewRendering:           true,
+		previewRenderingGeneration: 2,
+		previewGeneration:          2,
+		previewCache:               make(map[previewCacheKey][]string),
+		result:                     model.ScanResult{Skills: []*model.Skill{{Name: "TestSkill", Scope: model.ScopeProject, Preview: "current preview", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}}}},
+	}
+	m.syncViewport()
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	expectedWidth := max(1, rightWidth-4)
+
+	updatedModel, cmd := m.Update(previewRenderedMsg{markdown: "old preview", width: expectedWidth, lines: []string{"old"}, generation: 1})
+	resM := updatedModel.(appModel)
+	if !resM.previewRendering || resM.previewRenderingGeneration != 2 {
+		t.Fatalf("expected newer in-flight render to remain active, rendering=%t generation=%d", resM.previewRendering, resM.previewRenderingGeneration)
+	}
+	if cmd != nil {
+		t.Fatalf("expected no duplicate dispatch while newer render remains in flight, got %v", cmd)
 	}
 }
