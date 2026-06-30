@@ -587,27 +587,33 @@ func TestBulkPartialFailureRescansAndKeepsSelection(t *testing.T) {
 }
 
 func TestDeleteBrokenSymlinkPartialFailureRescans(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-denied symlink removal path is not meaningful as root")
+	}
 	cwd := t.TempDir()
 	goodLink := filepath.Join(cwd, "good-broken")
 	if err := os.Symlink(filepath.Join(cwd, "missing-good"), goodLink); err != nil {
 		t.Fatal(err)
 	}
-	// Use a non-empty directory, not permissions, as the failing remove target so
-	// the failure is deterministic even when tests run as root.
-	badPath := filepath.Join(cwd, "not-a-symlink-dir")
-	if err := os.Mkdir(badPath, 0o755); err != nil {
+	lockedDir := filepath.Join(cwd, "locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(badPath, "child"), []byte("x"), 0o644); err != nil {
+	badLink := filepath.Join(lockedDir, "bad-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-bad"), badLink); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
 
 	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
 		Name:  "Broken",
 		Scope: model.ScopeProject,
 		ObservedPaths: []model.ObservedPath{
 			{Path: goodLink, Status: model.StatusBrokenSymlink},
-			{Path: badPath, Status: model.StatusBrokenSymlink},
+			{Path: badLink, Status: model.StatusBrokenSymlink},
 		},
 	}}}}
 	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
@@ -623,8 +629,8 @@ func TestDeleteBrokenSymlinkPartialFailureRescans(t *testing.T) {
 	if _, err := os.Lstat(goodLink); !os.IsNotExist(err) {
 		t.Fatalf("expected removable broken symlink to be deleted, lstat err=%v", err)
 	}
-	if info, err := os.Lstat(badPath); err != nil || !info.IsDir() {
-		t.Fatalf("expected failed path to remain as directory, info=%v err=%v", info, err)
+	if _, err := os.Lstat(badLink); err != nil {
+		t.Fatalf("expected failed broken symlink to remain, lstat err=%v", err)
 	}
 }
 
@@ -655,6 +661,52 @@ func TestDeleteBrokenSymlinkTargetsMatchingScope(t *testing.T) {
 	}
 	if _, err := os.Lstat(globalLink); err != nil {
 		t.Fatalf("expected global broken symlink to remain, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkRechecksPathBeforeRemove(t *testing.T) {
+	cwd := t.TempDir()
+	restoredFile := filepath.Join(cwd, "restored-file")
+	if err := os.WriteFile(restoredFile, []byte("do not delete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoredTarget := filepath.Join(cwd, "restored-target")
+	if err := os.WriteFile(restoredTarget, []byte("target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoredLink := filepath.Join(cwd, "restored-link")
+	if err := os.Symlink(restoredTarget, restoredLink); err != nil {
+		t.Fatal(err)
+	}
+	brokenLink := filepath.Join(cwd, "still-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing"), brokenLink); err != nil {
+		t.Fatal(err)
+	}
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:  "Broken",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{Path: restoredFile, Status: model.StatusBrokenSymlink},
+			{Path: restoredLink, Status: model.StatusBrokenSymlink},
+			{Path: brokenLink, Status: model.StatusBrokenSymlink},
+		},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil || next.actionResult != nil {
+		t.Fatalf("expected cleanup success with rescan, result=%#v cmd=%v", next.actionResult, cmd)
+	}
+	if _, err := os.Lstat(brokenLink); !os.IsNotExist(err) {
+		t.Fatalf("expected still-broken symlink to be deleted, lstat err=%v", err)
+	}
+	if data, err := os.ReadFile(restoredFile); err != nil || string(data) != "do not delete" {
+		t.Fatalf("expected restored regular file to remain, data=%q err=%v", data, err)
+	}
+	if _, err := os.Lstat(restoredLink); err != nil {
+		t.Fatalf("expected restored working symlink to remain, lstat err=%v", err)
 	}
 }
 

@@ -1156,10 +1156,30 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 				if op.Status != model.StatusBrokenSymlink {
 					continue // safety: never touch working symlinks or canonical files
 				}
-				if err := os.Remove(op.Path); err != nil {
+				info, err := os.Lstat(op.Path)
+				if err != nil {
 					if os.IsNotExist(err) {
 						continue
 					}
+					failed++
+					if firstErr == "" {
+						firstErr = err.Error()
+					}
+					continue
+				}
+				if info.Mode()&os.ModeSymlink == 0 {
+					continue
+				}
+				if _, err := os.Stat(op.Path); err == nil || !os.IsNotExist(err) {
+					if err != nil {
+						failed++
+						if firstErr == "" {
+							firstErr = err.Error()
+						}
+					}
+					continue
+				}
+				if err := os.Remove(op.Path); err != nil {
 					failed++
 					if firstErr == "" {
 						firstErr = err.Error()
