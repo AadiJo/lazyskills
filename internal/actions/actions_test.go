@@ -366,3 +366,40 @@ func TestForAvailableSkillUnsafeRejection(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveSkillsCommandMutationIsolation(t *testing.T) {
+	oldLookPath := LookPath
+	defer func() {
+		LookPath = oldLookPath
+		ResetActionCaches()
+	}()
+
+	ResetActionCaches()
+	// Force it to return npx fallback with args
+	LookPath = func(name string) (string, error) {
+		return "", os.ErrNotExist
+	}
+	prog, args := ResolveSkillsCommand()
+	if prog != "npx" || len(args) != 2 || args[0] != "--yes" || args[1] != "skills" {
+		t.Fatalf("expected npx fallback, got prog=%q args=%#v", prog, args)
+	}
+
+	// Mutate returned slice
+	args[0] = "mutated"
+
+	// Retrieve again and verify it is isolated from the mutation
+	prog2, args2 := ResolveSkillsCommand()
+	if prog2 != "npx" || len(args2) != 2 || args2[0] != "--yes" || args2[1] != "skills" {
+		t.Fatalf("expected npx fallback after mutation, got prog=%q args=%#v", prog2, args2)
+	}
+
+	// Now try when LookPath finds skills and it returns nil args
+	ResetActionCaches()
+	LookPath = func(name string) (string, error) {
+		return "/usr/bin/skills", nil
+	}
+	prog3, args3 := ResolveSkillsCommand()
+	if prog3 != "skills" || args3 != nil {
+		t.Fatalf("expected skills and nil args, got prog=%q args=%#v", prog3, args3)
+	}
+}

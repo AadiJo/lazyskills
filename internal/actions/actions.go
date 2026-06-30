@@ -279,15 +279,15 @@ var LookPath = exec.LookPath
 // memoised results for HasSkillsOrNpx and ResolveSkillsCommand.
 // These depend only on PATH, which never changes during a session.
 var (
-	hasSkillsMu   sync.Mutex
-	hasSkillsOK   bool
-	hasSkillsAvail bool
+	hasSkillsMu     sync.Mutex
+	hasSkillsOK     bool
+	hasSkillsAvail  bool
 	hasSkillsReason string
 
-	resolveMu     sync.Mutex
-	resolveOK     bool
-	resolveProg   string
-	resolveArgs   []string
+	resolveMu   sync.Mutex
+	resolveOK   bool
+	resolveProg string
+	resolveArgs []string
 )
 
 // ResetActionCaches clears the process-lifetime caches for HasSkillsOrNpx
@@ -331,7 +331,11 @@ func ResolveSkillsCommand() (string, []string) {
 	}
 	prog, args := resolveProg, resolveArgs
 	resolveMu.Unlock()
-	return prog, args
+	var argsCopy []string
+	if args != nil {
+		argsCopy = append([]string(nil), args...)
+	}
+	return prog, argsCopy
 }
 
 func newPreview(id, title, program string, args []string, description string, mutates, confirm, dangerous bool, confirmValue string) CommandPreview {

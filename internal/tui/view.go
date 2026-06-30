@@ -711,14 +711,18 @@ var (
 )
 
 // previewRenderer returns a glamour renderer for the given render width,
-// creating and caching one as needed. Construction is ~hundreds of ms the
-// first time; subsequent lookups are O(1).
+// creating and caching one as needed. It implements a double-checked cache
+// pattern: checks cache under lock, constructs a new renderer outside the lock
+// if not present, and re-checks/inserts/evicts under lock.
+// Construction is ~hundreds of ms the first time; subsequent lookups are O(1).
 func previewRenderer(width int) *glamour.TermRenderer {
 	previewRenderersMu.Lock()
-	defer previewRenderersMu.Unlock()
 	if r, ok := previewRenderers[width]; ok {
+		previewRenderersMu.Unlock()
 		return r
 	}
+	previewRenderersMu.Unlock()
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStyles(compactPreviewMarkdownStyle()),
 		glamour.WithWordWrap(width),
@@ -726,8 +730,14 @@ func previewRenderer(width int) *glamour.TermRenderer {
 	if err != nil {
 		return nil
 	}
+
+	previewRenderersMu.Lock()
+	defer previewRenderersMu.Unlock()
+	if existing, ok := previewRenderers[width]; ok {
+		return existing
+	}
 	// Keep the cache bounded: evict one entry if we exceed 12 widths.
-	if len(previewRenderers) > 12 {
+	if len(previewRenderers) >= 12 {
 		for k := range previewRenderers {
 			delete(previewRenderers, k)
 			break

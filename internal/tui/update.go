@@ -27,9 +27,10 @@ type previewRefreshMsg struct {
 
 // previewRenderedMsg carries the result of an async glamour markdown render.
 type previewRenderedMsg struct {
-	markdown string
-	width    int
-	lines    []string
+	markdown   string
+	width      int
+	lines      []string
+	generation int
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -132,15 +133,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		key := previewCacheKey{markdown: msg.markdown, width: msg.width}
 		m.previewCache[key] = append([]string(nil), msg.lines...)
-		m.previewRendering = false
-		// Re-dispatch if the current skill's preview width differs from the
-		// rendered width (e.g. the terminal was resized between dispatch and
-		// completion). This ensures we never block View on a cache miss.
-		if cmd := m.dispatchPreviewRender(); cmd != nil {
-			m.previewRendering = true
-			return m, cmd
+		if msg.generation == m.previewGeneration {
+			m.previewRendering = false
+			// Re-dispatch if the current skill's preview width differs from the
+			// rendered width (e.g. the terminal was resized between dispatch and
+			// completion). This ensures we never block View on a cache miss.
+			if cmd := m.dispatchPreviewRender(); cmd != nil {
+				m.previewRendering = true
+				return m, cmd
+			}
+			m.syncViewport()
 		}
-		m.syncViewport()
 	case updatePlanMsg:
 		m.updatePlan = msg.plan
 		m.updatePlanErr = msg.err
@@ -735,6 +738,9 @@ func schedulePreviewRefresh(generation int) tea.Cmd {
 // async glamour markdown render. Returns nil when the preview is already cached
 // or the skill has no preview content.
 func (m appModel) dispatchPreviewRender() tea.Cmd {
+	if m.previewRendering {
+		return nil
+	}
 	rows := m.visibleRows()
 	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
 		return nil
@@ -759,9 +765,10 @@ func (m appModel) dispatchPreviewRender() tea.Cmd {
 	// Capture by value — do NOT capture m (model is value-copied each Update).
 	markdown := view.Preview
 	width := previewWidth
+	gen := m.previewGeneration
 	return func() tea.Msg {
 		lines := renderMarkdownPreview(markdown, width)
-		return previewRenderedMsg{markdown: markdown, width: width, lines: lines}
+		return previewRenderedMsg{markdown: markdown, width: width, lines: lines, generation: gen}
 	}
 }
 

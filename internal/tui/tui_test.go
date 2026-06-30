@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -2957,5 +2959,235 @@ func TestTuiEnableDisableEdgeCases(t *testing.T) {
 	resAppModel := resModel.(appModel)
 	if resAppModel.actionResult == nil || !strings.Contains(resAppModel.actionResult.Err, "destination already exists") {
 		t.Fatalf("expected actionResult to carry destination already exists error, got: %+v", resAppModel.actionResult)
+	}
+}
+
+func TestTUIPreviewRenderInFlightSuppression(t *testing.T) {
+	m := appModel{
+		width:            120,
+		height:           32,
+		selected:         1,
+		previewRendering: true,
+		previewCache:     make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+	m.syncViewport()
+
+	cmd := m.dispatchPreviewRender()
+	if cmd != nil {
+		t.Fatalf("expected dispatchPreviewRender to return nil when previewRendering is true, got %v", cmd)
+	}
+
+	m.previewRendering = false
+	cmd = m.dispatchPreviewRender()
+	if cmd == nil {
+		t.Fatalf("expected dispatchPreviewRender to return a cmd when previewRendering is false")
+	}
+}
+
+func TestPreviewRendererCacheBoundedTo12(t *testing.T) {
+	previewRenderersMu.Lock()
+	// Back up and restore previewRenderers map
+	backup := previewRenderers
+	// Reset package-level map
+	previewRenderers = make(map[int]*glamour.TermRenderer)
+	previewRenderersMu.Unlock()
+
+	defer func() {
+		previewRenderersMu.Lock()
+		previewRenderers = backup
+		previewRenderersMu.Unlock()
+	}()
+
+	// Request 12 different widths to fill the cache up to 12
+	for i := 10; i < 22; i++ {
+		renderer := previewRenderer(i)
+		if renderer == nil {
+			t.Fatalf("expected renderer to be created for width %d", i)
+		}
+	}
+
+	previewRenderersMu.Lock()
+	lengthBefore := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthBefore != 12 {
+		t.Fatalf("expected exactly 12 renderers in cache, got %d", lengthBefore)
+	}
+
+	// Requesting an existing width (cache hit) must not evict or change cache size
+	renderer := previewRenderer(15)
+	if renderer == nil {
+		t.Fatal("expected renderer to not be nil for existing width")
+	}
+
+	previewRenderersMu.Lock()
+	lengthAfterRefetch := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthAfterRefetch != 12 {
+		t.Fatalf("expected exactly 12 renderers in cache after hit, got %d", lengthAfterRefetch)
+	}
+
+	// Now request a new width (cache miss), which must evict one entry and keep the total size bounded to 12
+	renderer2 := previewRenderer(30)
+	if renderer2 == nil {
+		t.Fatal("expected renderer to not be nil for new width")
+	}
+
+	previewRenderersMu.Lock()
+	lengthAfterMiss := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthAfterMiss != 12 {
+		t.Fatalf("expected cache size to be capped at 12 after eviction/insert, got %d", lengthAfterMiss)
+	}
+}
+
+func TestPreviewRendererCacheConcurrency(t *testing.T) {
+	previewRenderersMu.Lock()
+	backup := previewRenderers
+	previewRenderers = make(map[int]*glamour.TermRenderer)
+	previewRenderersMu.Unlock()
+
+	defer func() {
+		previewRenderersMu.Lock()
+		previewRenderers = backup
+		previewRenderersMu.Unlock()
+	}()
+
+	var wg sync.WaitGroup
+	const numGoroutines = 20
+	renderers := make([]*glamour.TermRenderer, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Fetch the same width concurrently
+			renderers[idx] = previewRenderer(50)
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify all returned same non-nil renderer
+	first := renderers[0]
+	if first == nil {
+		t.Fatal("expected non-nil renderer")
+	}
+	for i, r := range renderers {
+		if r != first {
+			t.Errorf("renderer at index %d is different: %p vs %p", i, r, first)
+		}
+	}
+
+	previewRenderersMu.Lock()
+	cacheSize := len(previewRenderers)
+	previewRenderersMu.Unlock()
+	if cacheSize != 1 {
+		t.Errorf("expected cache size to be 1, got %d", cacheSize)
+	}
+}
+
+func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
+	// Initialize an appModel that triggers the check.
+	// We simulate that previewGeneration has advanced to 2, e.g. due to moving selection or reloading.
+	// previewRendering has been set to true already.
+	m := appModel{
+		width:             120,
+		height:            32,
+		selected:          0,
+		previewRendering:  true,
+		previewGeneration: 2,
+		previewCache:      make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+	m.syncViewport()
+
+	// Capture the expected target width for layout calculations (which should be 68)
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	expectedWidth := max(1, rightWidth-4)
+
+	// Simulate a stale previewRenderedMsg completing with generation 1 (before previewGeneration advanced)
+	staleMsg := previewRenderedMsg{
+		markdown:   "some preview text",
+		width:      expectedWidth,
+		lines:      []string{"stale lines content"},
+		generation: 1,
+	}
+
+	// Update the model with the stale message.
+	updatedModel, cmd := m.Update(staleMsg)
+	resM := updatedModel.(appModel)
+
+	// Since generation is stale:
+	// 1. It must store the cache entry (low-risk caching of even stale results)
+	staleKey := previewCacheKey{markdown: "some preview text", width: expectedWidth}
+	lines, cached := resM.previewCache[staleKey]
+	if !cached {
+		t.Fatalf("expected stale render result to be cached in previewCache")
+	}
+	if len(lines) != 1 || lines[0] != "stale lines content" {
+		t.Fatalf("expected cached lines to be 'stale lines content', got %v", lines)
+	}
+
+	// 2. It must NOT clear previewRendering (it remains true)
+	if !resM.previewRendering {
+		t.Fatalf("expected previewRendering to remain true for stale preview completion")
+	}
+
+	// 3. It must not redispatch
+	if cmd != nil {
+		t.Fatalf("expected cmd to be nil for stale preview completion, got %v", cmd)
+	}
+
+	// Now simulate a current-generation previewRenderedMsg completion with generation 2
+	currentMsg := previewRenderedMsg{
+		markdown:   "some preview text",
+		width:      expectedWidth,
+		lines:      []string{"current lines content"},
+		generation: 2,
+	}
+
+	// Update the model with the current-generation message.
+	updatedModel2, cmd2 := resM.Update(currentMsg)
+	resM2 := updatedModel2.(appModel)
+
+	// Since generation matches current:
+	// 1. It stores the cache entry (replacing or adding it)
+	lines2, cached2 := resM2.previewCache[staleKey]
+	if !cached2 {
+		t.Fatalf("expected current render result to be cached in previewCache")
+	}
+	if len(lines2) != 1 || lines2[0] != "current lines content" {
+		t.Fatalf("expected cached lines to be 'current lines content', got %v", lines2)
+	}
+
+	// 2. It clears previewRendering (becomes false) since the layout matches and it's already cached
+	if resM2.previewRendering {
+		t.Fatalf("expected previewRendering to be cleared (false) for current-generation preview completion, got true")
+	}
+
+	// 3. It must not redispatch since the width matches and it's already cached
+	if cmd2 != nil {
+		t.Fatalf("expected cmd2 to be nil for current-generation preview completion, got %v", cmd2)
 	}
 }
