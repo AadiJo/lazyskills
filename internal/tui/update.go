@@ -1172,6 +1172,10 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 				}
 				if _, err := os.Stat(op.Path); err == nil || !os.IsNotExist(err) {
 					if err != nil {
+						// If the target cannot be checked (for example EACCES while
+						// following the symlink), keep the symlink and surface the
+						// failure instead of risking deletion of a path that may no
+						// longer be broken.
 						failed++
 						if firstErr == "" {
 							firstErr = err.Error()
