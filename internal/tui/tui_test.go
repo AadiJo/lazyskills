@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -267,7 +269,7 @@ func TestAgentFilterListMarksNonVisibleSkills(t *testing.T) {
 			Visibility:    []model.SkillVisibility{{Agent: "claude-code", Display: "Claude Code", Visible: false, Reason: "missing_agent_link"}},
 		},
 	}}}
-	out := compat.StripTerminalEscapes(m.listPane(20, 80))
+	out := compat.StripTerminalEscapes(m.listPane(20, 80, m.visibleRows()))
 	if !strings.Contains(out, "Visible [P] ✓") || !strings.Contains(out, "Missing [P] ×") {
 		t.Fatalf("expected list-level visibility badges, got %q", out)
 	}
@@ -282,7 +284,7 @@ func TestListRendersIssueRowsWithSeverityBadges(t *testing.T) {
 		{Name: "Warning", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_global_lock", Severity: "warning", Message: "not tracked"}}},
 		{Name: "Error", Scope: model.ScopeProject, HealthIssues: []model.HealthIssue{{Type: "missing_file", Severity: "error", Message: "missing SKILL.md"}}},
 	}}}
-	out := m.listPane(20, 80)
+	out := m.listPane(20, 80, m.visibleRows())
 	if !strings.Contains(out, "Warning [P] ▲1") {
 		t.Fatalf("expected warning issue badge, got %q", out)
 	}
@@ -1301,6 +1303,11 @@ func TestMetadataShowsSkillDescription(t *testing.T) {
 func TestDetailScrollKeysMoveViewport(t *testing.T) {
 	preview := strings.Repeat("- line\n", 80)
 	m := appModel{width: 100, height: 20, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{Name: "Long", Description: "desc", Scope: model.ScopeProject, Preview: preview}}}}
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	previewWidth := max(1, rightWidth-4)
+	m.previewCache = map[previewCacheKey][]string{
+		{markdown: preview, width: previewWidth}: renderMarkdownPreview(preview, previewWidth),
+	}
 	m.syncViewport()
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	next := updated.(appModel)
@@ -1604,7 +1611,11 @@ func TestContextualFooterAndHelpModal(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { actions.LookPath = oldLookPath })
+	actions.ResetActionCaches()
+	t.Cleanup(func() {
+		actions.LookPath = oldLookPath
+		actions.ResetActionCaches()
+	})
 
 	m := appModel{
 		width:    100,
@@ -1685,7 +1696,11 @@ func TestFooterHidesUnavailableSkillHotkeys(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { actions.LookPath = oldLookPath })
+	actions.ResetActionCaches()
+	t.Cleanup(func() {
+		actions.LookPath = oldLookPath
+		actions.ResetActionCaches()
+	})
 
 	m := appModel{
 		width:    100,
@@ -1699,7 +1714,7 @@ func TestFooterHidesUnavailableSkillHotkeys(t *testing.T) {
 	}
 	m.syncViewport()
 
-	footer := m.footerText(100)
+	footer := m.footerText(100, m.visibleRows(), m.currentActions())
 	if strings.Contains(footer, "u update") {
 		t.Fatalf("untracked skill footer should hide unavailable update hotkey, got %q", footer)
 	}
@@ -1727,7 +1742,7 @@ func TestSourceScanHintIgnoresBulkSelection(t *testing.T) {
 	m.selectedKeys = map[string]bool{skillKey(m.result.Skills[0]): true}
 	m.syncViewport()
 
-	footer := m.footerText(120)
+	footer := m.footerText(120, m.visibleRows(), m.currentActions())
 	if !strings.Contains(footer, "d scan") {
 		t.Fatalf("source header should show scan even with bulk selection active, got %q", footer)
 	}
@@ -1784,7 +1799,11 @@ func TestSourceModalHelpIsCapabilityAware(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { actions.LookPath = oldLookPath })
+	actions.ResetActionCaches()
+	t.Cleanup(func() {
+		actions.LookPath = oldLookPath
+		actions.ResetActionCaches()
+	})
 	t.Setenv("EDITOR", "")
 
 	m := appModel{
@@ -2940,5 +2959,286 @@ func TestTuiEnableDisableEdgeCases(t *testing.T) {
 	resAppModel := resModel.(appModel)
 	if resAppModel.actionResult == nil || !strings.Contains(resAppModel.actionResult.Err, "destination already exists") {
 		t.Fatalf("expected actionResult to carry destination already exists error, got: %+v", resAppModel.actionResult)
+	}
+}
+
+func TestTUIPreviewRenderInFlightSuppression(t *testing.T) {
+	m := appModel{
+		width:            120,
+		height:           32,
+		selected:         1,
+		previewRendering: true,
+		previewCache:     make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+	m.syncViewport()
+
+	cmd := m.dispatchPreviewRender()
+	if cmd != nil {
+		t.Fatalf("expected dispatchPreviewRender to return nil when previewRendering is true, got %v", cmd)
+	}
+
+	m.previewRendering = false
+	cmd = m.dispatchPreviewRender()
+	if cmd == nil {
+		t.Fatalf("expected dispatchPreviewRender to return a cmd when previewRendering is false")
+	}
+}
+
+func TestTUIWindowResizeDispatchesPreviewRender(t *testing.T) {
+	m := appModel{
+		width:        100,
+		height:       30,
+		selected:     1,
+		previewCache: make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected window resize to dispatch preview render on cache miss")
+	}
+	if !next.previewRendering {
+		t.Fatal("expected window resize dispatch to mark preview rendering")
+	}
+	if next.previewRenderingGeneration != next.previewGeneration {
+		t.Fatalf("expected rendering generation %d, got %d", next.previewGeneration, next.previewRenderingGeneration)
+	}
+}
+
+func TestPreviewRendererCacheBoundedTo12(t *testing.T) {
+	previewRenderersMu.Lock()
+	// Back up and restore previewRenderers map
+	backup := previewRenderers
+	// Reset package-level map
+	previewRenderers = make(map[int]*glamour.TermRenderer)
+	previewRenderersMu.Unlock()
+
+	defer func() {
+		previewRenderersMu.Lock()
+		previewRenderers = backup
+		previewRenderersMu.Unlock()
+	}()
+
+	// Request 12 different widths to fill the cache up to 12
+	for i := 10; i < 22; i++ {
+		renderer := previewRenderer(i)
+		if renderer == nil {
+			t.Fatalf("expected renderer to be created for width %d", i)
+		}
+	}
+
+	previewRenderersMu.Lock()
+	lengthBefore := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthBefore != 12 {
+		t.Fatalf("expected exactly 12 renderers in cache, got %d", lengthBefore)
+	}
+
+	// Requesting an existing width (cache hit) must not evict or change cache size
+	renderer := previewRenderer(15)
+	if renderer == nil {
+		t.Fatal("expected renderer to not be nil for existing width")
+	}
+
+	previewRenderersMu.Lock()
+	lengthAfterRefetch := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthAfterRefetch != 12 {
+		t.Fatalf("expected exactly 12 renderers in cache after hit, got %d", lengthAfterRefetch)
+	}
+
+	// Now request a new width (cache miss), which must evict one entry and keep the total size bounded to 12
+	renderer2 := previewRenderer(30)
+	if renderer2 == nil {
+		t.Fatal("expected renderer to not be nil for new width")
+	}
+
+	previewRenderersMu.Lock()
+	lengthAfterMiss := len(previewRenderers)
+	previewRenderersMu.Unlock()
+
+	if lengthAfterMiss != 12 {
+		t.Fatalf("expected cache size to be capped at 12 after eviction/insert, got %d", lengthAfterMiss)
+	}
+}
+
+func TestPreviewRendererCacheConcurrency(t *testing.T) {
+	previewRenderersMu.Lock()
+	backup := previewRenderers
+	previewRenderers = make(map[int]*glamour.TermRenderer)
+	previewRenderersMu.Unlock()
+
+	defer func() {
+		previewRenderersMu.Lock()
+		previewRenderers = backup
+		previewRenderersMu.Unlock()
+	}()
+
+	var wg sync.WaitGroup
+	const numGoroutines = 20
+	renderers := make([]*glamour.TermRenderer, numGoroutines)
+	warmed := previewRenderer(50)
+	if warmed == nil {
+		t.Fatal("expected warm-up renderer")
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Fetch the same width concurrently
+			renderers[idx] = previewRenderer(50)
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify all returned same non-nil renderer
+	first := renderers[0]
+	if first == nil {
+		t.Fatal("expected non-nil renderer")
+	}
+	for i, r := range renderers {
+		if r != first {
+			t.Errorf("renderer at index %d is different: %p vs %p", i, r, first)
+		}
+	}
+
+	previewRenderersMu.Lock()
+	cacheSize := len(previewRenderers)
+	previewRenderersMu.Unlock()
+	if cacheSize != 1 {
+		t.Errorf("expected cache size to be 1, got %d", cacheSize)
+	}
+}
+
+func TestTUIPreviewRenderStaleCompletion(t *testing.T) {
+	m := appModel{
+		width:                      120,
+		height:                     32,
+		selected:                   1,
+		previewRendering:           true,
+		previewRenderingGeneration: 1,
+		previewGeneration:          2,
+		previewCache:               make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+	m.syncViewport()
+
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	expectedWidth := max(1, rightWidth-4)
+	currentKey := previewCacheKey{markdown: "some preview text", width: expectedWidth}
+
+	staleMsg := previewRenderedMsg{
+		markdown:   "old preview text",
+		width:      expectedWidth,
+		lines:      []string{"stale lines content"},
+		generation: 1,
+	}
+
+	updatedModel, cmd := m.Update(staleMsg)
+	resM := updatedModel.(appModel)
+
+	staleKey := previewCacheKey{markdown: "old preview text", width: expectedWidth}
+	lines, cached := resM.previewCache[staleKey]
+	if !cached {
+		t.Fatalf("expected stale render result to be cached in previewCache")
+	}
+	if len(lines) != 1 || lines[0] != "stale lines content" {
+		t.Fatalf("expected cached lines to be 'stale lines content', got %v", lines)
+	}
+	if _, cached := resM.previewCache[currentKey]; cached {
+		t.Fatalf("did not expect current preview to be cached by stale completion")
+	}
+
+	// The stale completion corresponded to the only in-flight render, so it must
+	// free the slot and dispatch a render for the current generation.
+	if !resM.previewRendering {
+		t.Fatalf("expected previewRendering to remain true for redispatched current render")
+	}
+	if resM.previewRenderingGeneration != 2 {
+		t.Fatalf("expected redispatched render generation 2, got %d", resM.previewRenderingGeneration)
+	}
+	if cmd == nil {
+		t.Fatalf("expected stale completion to dispatch current preview render")
+	}
+
+	currentMsg := previewRenderedMsg{
+		markdown:   "some preview text",
+		width:      expectedWidth,
+		lines:      []string{"current lines content"},
+		generation: 2,
+	}
+
+	updatedModel2, cmd2 := resM.Update(currentMsg)
+	resM2 := updatedModel2.(appModel)
+
+	lines2, cached2 := resM2.previewCache[currentKey]
+	if !cached2 {
+		t.Fatalf("expected current render result to be cached in previewCache")
+	}
+	if len(lines2) != 1 || lines2[0] != "current lines content" {
+		t.Fatalf("expected cached lines to be 'current lines content', got %v", lines2)
+	}
+	if resM2.previewRendering {
+		t.Fatalf("expected previewRendering to be cleared (false) for current-generation preview completion, got true")
+	}
+	if cmd2 != nil {
+		t.Fatalf("expected cmd2 to be nil for current-generation preview completion, got %v", cmd2)
+	}
+}
+
+func TestTUIPreviewRenderIgnoresCompletionWhenNewerRenderInFlight(t *testing.T) {
+	m := appModel{
+		width:                      120,
+		height:                     32,
+		selected:                   1,
+		previewRendering:           true,
+		previewRenderingGeneration: 2,
+		previewGeneration:          2,
+		previewCache:               make(map[previewCacheKey][]string),
+		result:                     model.ScanResult{Skills: []*model.Skill{{Name: "TestSkill", Scope: model.ScopeProject, Preview: "current preview", LocalLock: &model.LocalLockEntry{Source: "owner/repo"}}}},
+	}
+	m.syncViewport()
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	expectedWidth := max(1, rightWidth-4)
+
+	updatedModel, cmd := m.Update(previewRenderedMsg{markdown: "old preview", width: expectedWidth, lines: []string{"old"}, generation: 1})
+	resM := updatedModel.(appModel)
+	if !resM.previewRendering || resM.previewRenderingGeneration != 2 {
+		t.Fatalf("expected newer in-flight render to remain active, rendering=%t generation=%d", resM.previewRendering, resM.previewRenderingGeneration)
+	}
+	if cmd != nil {
+		t.Fatalf("expected no duplicate dispatch while newer render remains in flight, got %v", cmd)
 	}
 }

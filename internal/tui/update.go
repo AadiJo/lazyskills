@@ -25,6 +25,14 @@ type previewRefreshMsg struct {
 	generation int
 }
 
+// previewRenderedMsg carries the result of an async glamour markdown render.
+type previewRenderedMsg struct {
+	markdown   string
+	width      int
+	lines      []string
+	generation int
+}
+
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updateStart := time.Now()
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -40,13 +48,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.height = msg.Height
 		m.syncViewport()
+		if cmd := m.dispatchPreviewRender(); cmd != nil {
+			m.markPreviewRendering()
+			return m, cmd
+		}
 	case snapshotMsg:
 		m.result = msg.result
 		m.previewCache = make(map[previewCacheKey][]string)
-		m.previewPending = false
+		m.previewPending = true // prevent syncViewport from blocking on glamour
+		m.previewRendering = false
+		m.previewRenderingGeneration = 0
 		m.previewGeneration++
 		sortSkills(m.result.Skills)
 		m.rebuildSkillSearchText()
+		m.rebuildSkillViews()
 		m.err = msg.err
 		if m.agent != "" {
 			detected := false
@@ -63,7 +78,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampSelection()
 		m.pruneSelected()
 		m.actionResult = nil
+		// Seed with an empty (non-nil) slice so View's footer path doesn't
+		// fall back to currentActions (which calls exec.LookPath ≈4s on WSL2).
+		// clampAction in a later Update will populate the real actions.
+		m.cachedActions = []actions.CommandPreview{}
 		m.syncViewport()
+		// Immediately start the initial preview render off the main thread
+		// so the 2-3s glamour/chroma cost doesn't block the first frame.
+		if cmd := m.dispatchPreviewRender(); cmd != nil {
+			m.markPreviewRendering()
+			return m, cmd
+		}
+		m.previewPending = false
 	case discoveryResultMsg:
 		disc := SourceDiscovery{
 			Status:    DiscoveryReady,
@@ -99,9 +125,31 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		refreshStart := time.Now()
 		if msg.generation == m.previewGeneration {
 			m.previewPending = false
+			if cmd := m.dispatchPreviewRender(); cmd != nil {
+				m.markPreviewRendering()
+				return m, cmd
+			}
 			m.syncViewport()
 		}
 		perfLogf("preview_refresh msg_generation=%d current_generation=%d applied=%t duration=%s", msg.generation, m.previewGeneration, msg.generation == m.previewGeneration, time.Since(refreshStart))
+	case previewRenderedMsg:
+		if m.previewCache == nil {
+			m.previewCache = make(map[previewCacheKey][]string)
+		}
+		key := previewCacheKey{markdown: msg.markdown, width: msg.width}
+		m.previewCache[key] = append([]string(nil), msg.lines...)
+		if msg.generation == m.previewRenderingGeneration {
+			m.previewRendering = false
+			m.previewRenderingGeneration = 0
+			// Re-dispatch if the current skill's preview width differs from the
+			// rendered width (e.g. the terminal was resized between dispatch and
+			// completion). This ensures we never block View on a cache miss.
+			if cmd := m.dispatchPreviewRender(); cmd != nil {
+				m.markPreviewRendering()
+				return m, cmd
+			}
+			m.syncViewport()
+		}
 	case updatePlanMsg:
 		m.updatePlan = msg.plan
 		m.updatePlanErr = msg.err
@@ -641,6 +689,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if postKeyCmd != nil {
 			return m, postKeyCmd
 		}
+		if cmd := m.dispatchPreviewRender(); cmd != nil {
+			m.markPreviewRendering()
+			return m, cmd
+		}
 	}
 	return m, nil
 }
@@ -692,8 +744,52 @@ func schedulePreviewRefresh(generation int) tea.Cmd {
 	})
 }
 
+func (m *appModel) markPreviewRendering() {
+	m.previewRendering = true
+	m.previewRenderingGeneration = m.previewGeneration
+}
+
+// dispatchPreviewRender checks whether the currently selected skill needs an
+// async glamour markdown render. Returns nil when the preview is already cached
+// or the skill has no preview content.
+func (m appModel) dispatchPreviewRender() tea.Cmd {
+	if m.previewRendering {
+		return nil
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
+		return nil
+	}
+	row := rows[m.selected]
+	if row.isHeader || row.skill == nil {
+		return nil
+	}
+	view := m.cachedSkillView(row.skill)
+	if view.Preview == "" {
+		return nil
+	}
+	if m.previewCache == nil {
+		return nil // cache not initialized (bootstrapping)
+	}
+	_, rightWidth, _, _ := m.getThreePaneLayout()
+	previewWidth := max(1, rightWidth-4)
+	key := previewCacheKey{markdown: view.Preview, width: previewWidth}
+	if _, ok := m.previewCache[key]; ok {
+		return nil // already cached
+	}
+	// Capture by value — do NOT capture m (model is value-copied each Update).
+	markdown := view.Preview
+	width := previewWidth
+	gen := m.previewGeneration
+	return func() tea.Msg {
+		lines := renderMarkdownPreview(markdown, width)
+		return previewRenderedMsg{markdown: markdown, width: width, lines: lines, generation: gen}
+	}
+}
+
 func (m *appModel) clampAction() {
 	actions := m.currentActions()
+	m.cachedActions = actions
 	if len(actions) == 0 {
 		m.action = 0
 		return
@@ -707,6 +803,13 @@ func (m *appModel) clampAction() {
 }
 
 func (m appModel) currentActions() []actions.CommandPreview {
+	return m.currentActionsForRows(nil)
+}
+
+// currentActionsForRows is like currentActions but accepts a precomputed rows
+// slice so callers can avoid a redundant visibleRows() re-derivation (which
+// walks SanitizeMetadata per skill). Pass nil to fall back to m.visibleRows().
+func (m appModel) currentActionsForRows(rows []skillsRow) []actions.CommandPreview {
 	if m.modalSource != "" {
 		child, ok := m.currentModalSelectedChild()
 		if ok {
@@ -720,7 +823,9 @@ func (m appModel) currentActions() []actions.CommandPreview {
 	if len(selected) > 0 {
 		return actions.ForSkills(selected)
 	}
-	rows := m.visibleRows()
+	if rows == nil {
+		rows = m.visibleRows()
+	}
 	if len(rows) == 0 || m.selected < 0 || m.selected >= len(rows) {
 		return actions.AppLevelActions()
 	}
