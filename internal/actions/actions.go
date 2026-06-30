@@ -275,7 +275,7 @@ func deleteBrokenSymlinkPreview(sk *model.Skill) CommandPreview {
 		Title:           "Delete broken symlink(s)",
 		Description:     "Delete the broken/dangling symlink file(s) for this skill.",
 		Command:         "delete broken symlinks for " + compat.SanitizeMetadata(sk.Name),
-		Exec:            ExecSpec{Internal: "delete_broken_symlink"},
+		Exec:            ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(sk.Scope), sk.Name}},
 		Mutates:         true,
 		RequiresConfirm: true,
 		Dangerous:       true,

@@ -1140,10 +1140,16 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.confirming = false
 		m.confirmInput = ""
 		m.confirmError = ""
+		targetScope := ""
+		targetName := action.ConfirmValue
+		if len(action.Exec.Args) >= 2 {
+			targetScope = action.Exec.Args[0]
+			targetName = action.Exec.Args[1]
+		}
 		removed, failed := 0, 0
 		firstErr := ""
 		for _, sk := range m.result.Skills {
-			if sk.Name != action.ConfirmValue {
+			if sk.Name != targetName || (targetScope != "" && string(sk.Scope) != targetScope) {
 				continue
 			}
 			for _, op := range sk.ObservedPaths {

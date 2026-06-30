@@ -69,6 +69,9 @@ func TestDeleteBrokenSymlinkAction(t *testing.T) {
 	if deleteAct.ConfirmValue != "broken-skill" || deleteAct.Exec.Internal != "delete_broken_symlink" {
 		t.Fatalf("unexpected delete preview: %+v", *deleteAct)
 	}
+	if len(deleteAct.Exec.Args) != 2 || deleteAct.Exec.Args[0] != string(model.ScopeProject) || deleteAct.Exec.Args[1] != "broken-skill" {
+		t.Fatalf("expected scoped delete args, got %+v", deleteAct.Exec.Args)
+	}
 	if !strings.Contains(deleteAct.Title, "broken symlink") {
 		t.Fatalf("expected title to mention broken symlinks, got %q", deleteAct.Title)
 	}
