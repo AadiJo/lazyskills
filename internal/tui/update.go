@@ -48,6 +48,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.height = msg.Height
 		m.syncViewport()
+		if cmd := m.dispatchPreviewRender(); cmd != nil {
+			m.markPreviewRendering()
+			return m, cmd
+		}
 	case snapshotMsg:
 		m.result = msg.result
 		m.previewCache = make(map[previewCacheKey][]string)

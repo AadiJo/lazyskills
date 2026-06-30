@@ -2994,6 +2994,37 @@ func TestTUIPreviewRenderInFlightSuppression(t *testing.T) {
 	}
 }
 
+func TestTUIWindowResizeDispatchesPreviewRender(t *testing.T) {
+	m := appModel{
+		width:        100,
+		height:       30,
+		selected:     1,
+		previewCache: make(map[previewCacheKey][]string),
+		result: model.ScanResult{
+			Skills: []*model.Skill{
+				{
+					Name:      "TestSkill",
+					Scope:     model.ScopeProject,
+					Preview:   "some preview text",
+					LocalLock: &model.LocalLockEntry{Source: "owner/repo"},
+				},
+			},
+		},
+	}
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected window resize to dispatch preview render on cache miss")
+	}
+	if !next.previewRendering {
+		t.Fatal("expected window resize dispatch to mark preview rendering")
+	}
+	if next.previewRenderingGeneration != next.previewGeneration {
+		t.Fatalf("expected rendering generation %d, got %d", next.previewGeneration, next.previewRenderingGeneration)
+	}
+}
+
 func TestPreviewRendererCacheBoundedTo12(t *testing.T) {
 	previewRenderersMu.Lock()
 	// Back up and restore previewRenderers map
