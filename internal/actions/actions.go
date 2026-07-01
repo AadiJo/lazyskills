@@ -246,23 +246,16 @@ func pruneLockPreview(sk *model.Skill) CommandPreview {
 	}
 }
 
-// brokenSymlinkPaths returns the on-disk paths of this skill's broken
-// (dangling) symlinks.
-func brokenSymlinkPaths(sk *model.Skill) []string {
+func hasBrokenSymlink(sk *model.Skill) bool {
 	if sk == nil {
-		return nil
+		return false
 	}
-	var paths []string
 	for _, op := range sk.ObservedPaths {
 		if op.Status == model.StatusBrokenSymlink {
-			paths = append(paths, op.Path)
+			return true
 		}
 	}
-	return paths
-}
-
-func hasBrokenSymlink(sk *model.Skill) bool {
-	return len(brokenSymlinkPaths(sk)) > 0
+	return false
 }
 
 // deleteBrokenSymlinkPreview builds the internal action that deletes the
