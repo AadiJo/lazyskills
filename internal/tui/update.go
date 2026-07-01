@@ -77,7 +77,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampSelection()
 		m.pruneSelected()
-		m.actionResult = nil
+		m.actionResult = msg.actionResult
 		// Seed with an empty (non-nil) slice so View's footer path doesn't
 		// fall back to currentActions (which calls exec.LookPath ≈4s on WSL2).
 		// clampAction in a later Update will populate the real actions.
@@ -1134,6 +1134,98 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		// Success: rescan drops the now-pruned phantom from the list.
 		m.actionResult = nil
 		return m, loadSnapshot(m.cwd)
+	}
+	if action.Exec.Internal == "delete_broken_symlink" {
+		m.commands = false
+		m.confirming = false
+		m.confirmInput = ""
+		m.confirmError = ""
+		if len(action.Exec.Args) < 2 || action.Exec.Args[0] == "" || action.Exec.Args[1] == "" {
+			m.actionResult = &runner.Result{Program: "delete-broken-symlink", Args: []string{action.ConfirmValue}, ExitCode: -1, Err: "delete action is missing scoped skill identity"}
+			m.syncViewport()
+			return m, nil
+		}
+		targetScope := action.Exec.Args[0]
+		targetName := action.Exec.Args[1]
+		removed, failed := 0, 0
+		firstErr := ""
+		for _, sk := range m.result.Skills {
+			if sk.Name != targetName || string(sk.Scope) != targetScope {
+				continue
+			}
+			for _, op := range sk.ObservedPaths {
+				if op.Status != model.StatusBrokenSymlink {
+					continue // safety: never touch working symlinks or canonical files
+				}
+				info, err := os.Lstat(op.Path)
+				if err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					failed++
+					if firstErr == "" {
+						firstErr = err.Error()
+					}
+					continue
+				}
+				if info.Mode()&os.ModeSymlink == 0 {
+					continue
+				}
+				_, statErr := os.Stat(op.Path)
+				if statErr == nil {
+					continue // target exists again; no longer a broken symlink
+				}
+				if !os.IsNotExist(statErr) {
+					// If the target cannot be checked (for example EACCES while
+					// following the symlink), keep the symlink and surface the
+					// failure instead of risking deletion of a path that may no
+					// longer be broken.
+					failed++
+					if firstErr == "" {
+						firstErr = statErr.Error()
+					}
+					continue
+				}
+				if err := os.Remove(op.Path); err != nil {
+					failed++
+					if firstErr == "" {
+						firstErr = err.Error()
+					}
+					continue
+				}
+				removed++
+			}
+			break
+		}
+		if failed > 0 {
+			result := runner.Result{
+				Program:  "delete-broken-symlink",
+				Args:     []string{action.ConfirmValue},
+				ExitCode: -1,
+				Err:      fmt.Sprintf("removed %d broken symlink(s), %d failed: %s", removed, failed, compat.SanitizeMetadata(firstErr)),
+			}
+			m.actionResult = &result
+			m.syncViewport()
+			return m, loadSnapshotWithActionResult(m.cwd, result)
+		}
+		if removed == 0 {
+			result := runner.Result{
+				Program: "delete-broken-symlink",
+				Args:    []string{action.ConfirmValue},
+				Stdout:  "0 broken symlink(s) found at deletion time",
+			}
+			m.actionResult = &result
+			m.syncViewport()
+			return m, loadSnapshotWithActionResult(m.cwd, result)
+		}
+		result := runner.Result{
+			Program: "delete-broken-symlink",
+			Args:    []string{action.ConfirmValue},
+			Stdout:  fmt.Sprintf("%d broken symlink(s) removed", removed),
+		}
+		m.actionResult = &result
+		m.syncViewport()
+		return m, loadSnapshotWithActionResult(m.cwd, result)
 	}
 	if action.Exec.Internal == "refresh" {
 		m.actionResult = nil

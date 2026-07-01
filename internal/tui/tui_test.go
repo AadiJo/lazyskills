@@ -586,6 +586,261 @@ func TestBulkPartialFailureRescansAndKeepsSelection(t *testing.T) {
 	}
 }
 
+func TestDeleteBrokenSymlinkPartialFailureRescans(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-denied symlink removal path is not meaningful as root")
+	}
+	cwd := t.TempDir()
+	goodLink := filepath.Join(cwd, "good-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-good"), goodLink); err != nil {
+		t.Fatal(err)
+	}
+	lockedDir := filepath.Join(cwd, "locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badLink := filepath.Join(lockedDir, "bad-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-bad"), badLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:  "Broken",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{Path: goodLink, Status: model.StatusBrokenSymlink},
+			{Path: badLink, Status: model.StatusBrokenSymlink},
+		},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected partial delete success to trigger a rescan")
+	}
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 1 broken symlink") {
+		t.Fatalf("expected partial failure action result, got %#v", next.actionResult)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 1 broken symlink") {
+		t.Fatalf("expected partial failure result to survive rescan, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(goodLink); !os.IsNotExist(err) {
+		t.Fatalf("expected removable broken symlink to be deleted, lstat err=%v", err)
+	}
+	if _, err := os.Lstat(badLink); err != nil {
+		t.Fatalf("expected failed broken symlink to remain, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkFailureRescans(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-denied symlink removal path is not meaningful as root")
+	}
+	cwd := t.TempDir()
+	lockedDir := filepath.Join(cwd, "locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badLink := filepath.Join(lockedDir, "bad-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-bad"), badLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:          "Broken",
+		Scope:         model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{{Path: badLink, Status: model.StatusBrokenSymlink}},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected failed delete to trigger a rescan")
+	}
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 0 broken symlink") {
+		t.Fatalf("expected failed delete action result, got %#v", next.actionResult)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 0 broken symlink") {
+		t.Fatalf("expected failed delete result to survive rescan, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(badLink); err != nil {
+		t.Fatalf("expected failed broken symlink to remain after rescan, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkRequiresScopedIdentity(t *testing.T) {
+	cwd := t.TempDir()
+	projectLink := filepath.Join(cwd, "project-broken")
+	globalLink := filepath.Join(cwd, "global-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-project"), projectLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(cwd, "missing-global"), globalLink); err != nil {
+		t.Fatal(err)
+	}
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "Duplicate", Scope: model.ScopeGlobal, ObservedPaths: []model.ObservedPath{{Path: globalLink, Status: model.StatusBrokenSymlink}}},
+		{Name: "Duplicate", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Path: projectLink, Status: model.StatusBrokenSymlink}}},
+	}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Duplicate", Exec: actions.ExecSpec{Internal: "delete_broken_symlink"}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd != nil {
+		t.Fatalf("expected malformed delete action not to run, got cmd=%v", cmd)
+	}
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "missing scoped skill identity") {
+		t.Fatalf("expected missing scoped identity error, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(projectLink); err != nil {
+		t.Fatalf("expected project link to remain, err=%v", err)
+	}
+	if _, err := os.Lstat(globalLink); err != nil {
+		t.Fatalf("expected global link to remain, err=%v", err)
+	}
+
+	action.Exec.Args = []string{"", "Duplicate"}
+	updated, cmd = m.executeAction(action)
+	next = updated.(appModel)
+	if cmd != nil {
+		t.Fatalf("expected empty-scope delete action not to run, got cmd=%v", cmd)
+	}
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "missing scoped skill identity") {
+		t.Fatalf("expected empty-scope identity error, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(projectLink); err != nil {
+		t.Fatalf("expected project link to remain after empty-scope action, err=%v", err)
+	}
+	if _, err := os.Lstat(globalLink); err != nil {
+		t.Fatalf("expected global link to remain after empty-scope action, err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkTargetsMatchingScope(t *testing.T) {
+	cwd := t.TempDir()
+	projectLink := filepath.Join(cwd, "project-broken")
+	globalLink := filepath.Join(cwd, "global-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-project"), projectLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(cwd, "missing-global"), globalLink); err != nil {
+		t.Fatal(err)
+	}
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{
+		{Name: "Duplicate", Scope: model.ScopeGlobal, ObservedPaths: []model.ObservedPath{{Path: globalLink, Status: model.StatusBrokenSymlink}}},
+		{Name: "Duplicate", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Path: projectLink, Status: model.StatusBrokenSymlink}}},
+	}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Duplicate", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Duplicate"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil || next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected scoped delete success with rescan, result=%#v cmd=%v", next.actionResult, cmd)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected scoped delete success result to survive rescan, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(projectLink); !os.IsNotExist(err) {
+		t.Fatalf("expected project broken symlink to be deleted, lstat err=%v", err)
+	}
+	if _, err := os.Lstat(globalLink); err != nil {
+		t.Fatalf("expected global broken symlink to remain, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkRechecksPathBeforeRemove(t *testing.T) {
+	cwd := t.TempDir()
+	restoredFile := filepath.Join(cwd, "restored-file")
+	if err := os.WriteFile(restoredFile, []byte("do not delete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoredTarget := filepath.Join(cwd, "restored-target")
+	if err := os.WriteFile(restoredTarget, []byte("target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoredLink := filepath.Join(cwd, "restored-link")
+	if err := os.Symlink(restoredTarget, restoredLink); err != nil {
+		t.Fatal(err)
+	}
+	brokenLink := filepath.Join(cwd, "still-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing"), brokenLink); err != nil {
+		t.Fatal(err)
+	}
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:  "Broken",
+		Scope: model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{
+			{Path: restoredFile, Status: model.StatusBrokenSymlink},
+			{Path: restoredLink, Status: model.StatusBrokenSymlink},
+			{Path: brokenLink, Status: model.StatusBrokenSymlink},
+		},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil || next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected cleanup success with rescan, result=%#v cmd=%v", next.actionResult, cmd)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected successful cleanup result to survive rescan, got %#v", next.actionResult)
+	}
+	if _, err := os.Lstat(brokenLink); !os.IsNotExist(err) {
+		t.Fatalf("expected still-broken symlink to be deleted, lstat err=%v", err)
+	}
+	if data, err := os.ReadFile(restoredFile); err != nil || string(data) != "do not delete" {
+		t.Fatalf("expected restored regular file to remain, data=%q err=%v", data, err)
+	}
+	if _, err := os.Lstat(restoredLink); err != nil {
+		t.Fatalf("expected restored working symlink to remain, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkNoopReportsAndRescans(t *testing.T) {
+	cwd := t.TempDir()
+	missingLink := filepath.Join(cwd, "already-gone")
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:          "Broken",
+		Scope:         model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{{Path: missingLink, Status: model.StatusBrokenSymlink}},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected no-op delete to trigger a rescan")
+	}
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "0 broken symlink") {
+		t.Fatalf("expected no-op informational action result, got %#v", next.actionResult)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "0 broken symlink") {
+		t.Fatalf("expected no-op informational result to survive rescan, got %#v", next.actionResult)
+	}
+}
+
 func TestDirectUpdateHotkeyStartsCurrentOrBulkAction(t *testing.T) {
 	m := actionTestModel(t.TempDir())
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
