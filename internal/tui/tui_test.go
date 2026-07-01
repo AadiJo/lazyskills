@@ -626,11 +626,56 @@ func TestDeleteBrokenSymlinkPartialFailureRescans(t *testing.T) {
 	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 1 broken symlink") {
 		t.Fatalf("expected partial failure action result, got %#v", next.actionResult)
 	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 1 broken symlink") {
+		t.Fatalf("expected partial failure result to survive rescan, got %#v", next.actionResult)
+	}
 	if _, err := os.Lstat(goodLink); !os.IsNotExist(err) {
 		t.Fatalf("expected removable broken symlink to be deleted, lstat err=%v", err)
 	}
 	if _, err := os.Lstat(badLink); err != nil {
 		t.Fatalf("expected failed broken symlink to remain, lstat err=%v", err)
+	}
+}
+
+func TestDeleteBrokenSymlinkFailureRescans(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-denied symlink removal path is not meaningful as root")
+	}
+	cwd := t.TempDir()
+	lockedDir := filepath.Join(cwd, "locked")
+	if err := os.Mkdir(lockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badLink := filepath.Join(lockedDir, "bad-broken")
+	if err := os.Symlink(filepath.Join(cwd, "missing-bad"), badLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+
+	m := appModel{cwd: cwd, width: 120, height: 32, selected: 1, result: model.ScanResult{Skills: []*model.Skill{{
+		Name:          "Broken",
+		Scope:         model.ScopeProject,
+		ObservedPaths: []model.ObservedPath{{Path: badLink, Status: model.StatusBrokenSymlink}},
+	}}}}
+	action := actions.CommandPreview{ID: "delete_broken_symlink", ConfirmValue: "Broken", Exec: actions.ExecSpec{Internal: "delete_broken_symlink", Args: []string{string(model.ScopeProject), "Broken"}}}
+
+	updated, cmd := m.executeAction(action)
+	next := updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected failed delete to trigger a rescan")
+	}
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 0 broken symlink") {
+		t.Fatalf("expected failed delete action result, got %#v", next.actionResult)
+	}
+	updated, _ = next.Update(cmd())
+	next = updated.(appModel)
+	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 0 broken symlink") {
+		t.Fatalf("expected failed delete result to survive rescan, got %#v", next.actionResult)
 	}
 }
 

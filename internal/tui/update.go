@@ -1205,10 +1205,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 			}
 			m.actionResult = &result
 			m.syncViewport()
-			if removed > 0 {
-				return m, loadSnapshotWithActionResult(m.cwd, result)
-			}
-			return m, nil
+			return m, loadSnapshotWithActionResult(m.cwd, result)
 		}
 		if removed == 0 {
 			result := runner.Result{
