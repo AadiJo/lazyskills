@@ -1150,7 +1150,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		removed, failed := 0, 0
 		firstErr := ""
 		for _, sk := range m.result.Skills {
-			if sk.Name != targetName || (targetScope != "" && string(sk.Scope) != targetScope) {
+			if sk.Name != targetName || string(sk.Scope) != targetScope {
 				continue
 			}
 			for _, op := range sk.ObservedPaths {
