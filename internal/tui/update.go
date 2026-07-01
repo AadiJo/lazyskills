@@ -1218,8 +1218,14 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 			m.syncViewport()
 			return m, loadSnapshotWithActionResult(m.cwd, result)
 		}
-		m.actionResult = nil
-		return m, loadSnapshot(m.cwd)
+		result := runner.Result{
+			Program: "delete-broken-symlink",
+			Args:    []string{action.ConfirmValue},
+			Stdout:  fmt.Sprintf("%d broken symlink(s) removed", removed),
+		}
+		m.actionResult = &result
+		m.syncViewport()
+		return m, loadSnapshotWithActionResult(m.cwd, result)
 	}
 	if action.Exec.Internal == "refresh" {
 		m.actionResult = nil

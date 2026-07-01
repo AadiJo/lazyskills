@@ -733,13 +733,13 @@ func TestDeleteBrokenSymlinkTargetsMatchingScope(t *testing.T) {
 
 	updated, cmd := m.executeAction(action)
 	next := updated.(appModel)
-	if cmd == nil || next.actionResult != nil {
+	if cmd == nil || next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
 		t.Fatalf("expected scoped delete success with rescan, result=%#v cmd=%v", next.actionResult, cmd)
 	}
 	updated, _ = next.Update(cmd())
 	next = updated.(appModel)
-	if next.actionResult != nil {
-		t.Fatalf("expected scoped delete result to stay clear after rescan, got %#v", next.actionResult)
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected scoped delete success result to survive rescan, got %#v", next.actionResult)
 	}
 	if _, err := os.Lstat(projectLink); !os.IsNotExist(err) {
 		t.Fatalf("expected project broken symlink to be deleted, lstat err=%v", err)
@@ -781,13 +781,13 @@ func TestDeleteBrokenSymlinkRechecksPathBeforeRemove(t *testing.T) {
 
 	updated, cmd := m.executeAction(action)
 	next := updated.(appModel)
-	if cmd == nil || next.actionResult != nil {
+	if cmd == nil || next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
 		t.Fatalf("expected cleanup success with rescan, result=%#v cmd=%v", next.actionResult, cmd)
 	}
 	updated, _ = next.Update(cmd())
 	next = updated.(appModel)
-	if next.actionResult != nil {
-		t.Fatalf("expected successful cleanup result to stay clear after rescan, got %#v", next.actionResult)
+	if next.actionResult == nil || !strings.Contains(next.actionResult.Stdout, "1 broken symlink") {
+		t.Fatalf("expected successful cleanup result to survive rescan, got %#v", next.actionResult)
 	}
 	if _, err := os.Lstat(brokenLink); !os.IsNotExist(err) {
 		t.Fatalf("expected still-broken symlink to be deleted, lstat err=%v", err)
