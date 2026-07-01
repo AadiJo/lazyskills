@@ -677,6 +677,9 @@ func TestDeleteBrokenSymlinkFailureRescans(t *testing.T) {
 	if next.actionResult == nil || next.actionResult.ExitCode != -1 || !strings.Contains(next.actionResult.Err, "removed 0 broken symlink") {
 		t.Fatalf("expected failed delete result to survive rescan, got %#v", next.actionResult)
 	}
+	if _, err := os.Lstat(badLink); err != nil {
+		t.Fatalf("expected failed broken symlink to remain after rescan, lstat err=%v", err)
+	}
 }
 
 func TestDeleteBrokenSymlinkRequiresScopedIdentity(t *testing.T) {
