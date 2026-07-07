@@ -1889,7 +1889,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			status, _ := m.checkRegistrySkillStatus(s)
 			var badge string
 			if status == StatusInstalled {
-				badge = scopeProjectStyle.Render("[installed]")
+				badge = scopeProjectStyle.Render("[i]")
 			} else if status == StatusSimilarInstalled {
 				badge = warningStyle.Render("[similar]")
 			} else if s.Invalid {
