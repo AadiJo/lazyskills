@@ -626,3 +626,38 @@ func TestTUIRegistryMultiInstallDispatch(t *testing.T) {
 		t.Errorf("unexpected confirmation view: %s", viewStr)
 	}
 }
+
+func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
+	m := newModel("")
+	m.width = 120
+	m.height = 30
+	m.registryModal = true
+	m.registryQuery = "xyz"
+	m.registryResults = []registry.Skill{
+		{DisplayName: "My Display Name", Slug: "my-display-name", Source: "github.com/my-org/my-repo"},
+	}
+	m.registrySelected = 0
+
+	// Test 1: Search focused (list unfocused) -> inactiveSelectedStyle (subtle background)
+	m.registryFocusList = false
+	viewStr1 := m.View()
+	if !strings.Contains(viewStr1, "My Display Name") || !strings.Contains(viewStr1, "my-org/my-repo") {
+		t.Fatal("expected view to contain display name and source context")
+	}
+
+	// Test 2: List focused -> selectedStyle (active selected background)
+	m.registryFocusList = true
+	// Trigger project install to show confirmation overlay
+	modelTmp, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mClone := modelTmp.(appModel)
+
+	if !mClone.confirming {
+		t.Fatal("expected confirmation overlay to be active")
+	}
+
+	// Confirmation screen should explicitly show target agents
+	viewStr2 := mClone.View()
+	if !strings.Contains(viewStr2, "Target agents") || !strings.Contains(viewStr2, "all detected") {
+		t.Errorf("expected confirmation view to explicitly state target agents, got:\n%s", viewStr2)
+	}
+}

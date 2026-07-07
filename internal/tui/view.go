@@ -1596,6 +1596,19 @@ func (m appModel) confirmationOverlay(layout appLayout) string {
 	if command != "" {
 		lines = append(lines, sectionHeaderStyle.Render("Command"), dimStyle.Render(wrapText(command, 48)), "")
 	}
+	if m.pendingAction != nil && (m.pendingAction.ID == "install_skill" || m.pendingAction.ID == "bulk_install_skills") {
+		var detectedAgents []string
+		for _, agent := range m.result.Agents {
+			if agent.Detected {
+				detectedAgents = append(detectedAgents, agent.Display)
+			}
+		}
+		agentText := "none detected"
+		if len(detectedAgents) > 0 {
+			agentText = strings.Join(detectedAgents, ", ")
+		}
+		lines = append(lines, sectionHeaderStyle.Render("Target agents"), dimStyle.Render("all detected ("+agentText+")"), "")
+	}
 	lines = append(lines, wrapText(instruction, 48))
 
 	if m.confirmError != "" {
@@ -1770,10 +1783,18 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 	} else {
 		// Show results
 		for idx, s := range m.registryResults {
-			selector := "  "
+			selector := " "
 			if idx == m.registrySelected {
-				selector = "› "
+				selector = "›"
 			}
+			selectedMark := " "
+			if m.registrySelectedKeys != nil {
+				if _, isSel := m.registrySelectedKeys[s.Source+"\x00"+s.Slug]; isSel {
+					selectedMark = "●"
+				}
+			}
+			prefix := selector + selectedMark + " "
+			prefixWidth := 3
 
 			status, _ := m.checkRegistrySkillStatus(s)
 			var badge string
@@ -1781,13 +1802,13 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				badge = scopeProjectStyle.Render("[installed]")
 			} else if status == StatusSimilarInstalled {
 				badge = warningStyle.Render("[similar]")
+			} else if s.Invalid {
+				badge = errorStyle.Render("[invalid]")
 			}
 
 			installsText := fmt.Sprintf("%d↓", s.Installs)
 			installsStyled := dimStyle.Render(installsText)
 
-			// Selector (2) + Name(?) + Badge(?) + Installs(?)
-			// Let's truncate Name to fit nicely in leftWidth
 			rightPart := ""
 			if badge != "" {
 				rightPart = badge + " " + installsStyled
@@ -1795,28 +1816,61 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				rightPart = installsStyled
 			}
 			rightPartWidth := lipgloss.Width(rightPart)
-			availNameWidth := leftWidth - 2 - rightPartWidth - 1 // 1 space padding
+			availNameWidth := leftWidth - prefixWidth - rightPartWidth - 1 // 1 space padding
 			if availNameWidth < 5 {
 				availNameWidth = 5
 			}
-			selectedMark := "  "
-			if m.registrySelectedKeys != nil {
-				if _, isSel := m.registrySelectedKeys[s.Source+"\x00"+s.Slug]; isSel {
-					selectedMark = "● "
+
+			srcCtx := ""
+			if s.Source != "" {
+				srcCtx = normalizeSource(s.Source)
+			}
+
+			plainNameAndSource := s.DisplayName
+			if srcCtx != "" {
+				plainNameAndSource += " (" + srcCtx + ")"
+			}
+
+			// Truncate the plain text
+			truncatedPlain := truncate(plainNameAndSource, availNameWidth)
+
+			var styledText string
+			if idx == m.registrySelected {
+				// Highlighted row is formatted entirely by selectedStyle/inactiveSelectedStyle, keep plain
+				styledText = truncatedPlain
+			} else {
+				if status == StatusInstalled || s.Invalid {
+					// Installed/unavailable rows are dimmed
+					styledText = dimStyle.Render(truncatedPlain)
+				} else {
+					// Normal row: style source context as dim
+					if len(truncatedPlain) > len(s.DisplayName) {
+						displayNamePart := truncatedPlain[:len(s.DisplayName)]
+						sourcePart := truncatedPlain[len(s.DisplayName):]
+						styledText = displayNamePart + dimStyle.Render(sourcePart)
+					} else {
+						styledText = truncatedPlain
+					}
 				}
 			}
-			namePart := truncate(selectedMark+s.DisplayName, availNameWidth)
 
 			// Pad the line
-			line := selector + namePart
-			paddingLen := leftWidth - lipgloss.Width(line) - rightPartWidth
+			linePlain := prefix + truncatedPlain
+			paddingLen := leftWidth - lipgloss.Width(linePlain) - rightPartWidth
+			line := prefix + styledText
 			if paddingLen > 0 {
 				line += strings.Repeat(" ", paddingLen)
 			}
 			line += rightPart
 
 			if idx == m.registrySelected {
-				leftContentLines = append(leftContentLines, selectedStyle.Render(padRight(line, leftWidth)))
+				var lineStyled string
+				if m.registryFocusList {
+					lineStyled = selectedStyle.Render(padRight(prefix+truncatedPlain+rightPart, leftWidth))
+				} else {
+					lineStyled = inactiveSelectedStyle.Render(padRight(prefix+truncatedPlain+rightPart, leftWidth))
+				}
+				leftContentLines = append(leftContentLines, lineStyled)
 			} else {
 				leftContentLines = append(leftContentLines, line)
 			}
@@ -1828,51 +1882,16 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 	// Right pane: detail preview / bulk details
 	var rightContentLines []string
 	selectedCount := m.registrySelectedCount()
-	if selectedCount > 0 {
-		rightContentLines = append(rightContentLines,
-			titleStyle.Render(fmt.Sprintf("Bulk Installation (%d)", selectedCount)),
-			"",
-			sectionHeaderStyle.Render("Selected Skills:"),
-			"",
-		)
-		for _, selSkill := range m.registrySelectedKeys {
-			rightContentLines = append(rightContentLines,
-				fmt.Sprintf("  • %s (%s)", selSkill.DisplayName, selSkill.Slug),
-			)
-		}
-
-		var list []actions.AvailableSkillInstall
-		for _, s := range m.registrySelectedKeys {
-			list = append(list, actions.AvailableSkillInstall{
-				Source:      s.Source,
-				DisplayName: s.DisplayName,
-				Slug:        s.Slug,
-			})
-		}
-		projPreview := actions.ForAvailableSkills(list, false)
-		globalPreview := actions.ForAvailableSkills(list, true)
-
-		rightContentLines = append(rightContentLines, "")
-		rightContentLines = append(rightContentLines, sectionHeaderStyle.Render("Install Commands:"), "")
-		if projPreview.Available {
-			rightContentLines = append(rightContentLines,
-				dimStyle.Render("Project-local:"),
-				"  "+projPreview.Command,
-			)
-		} else {
-			rightContentLines = append(rightContentLines, errorStyle.Render("Project-local: "+projPreview.Reason))
-		}
-		if globalPreview.Available {
-			rightContentLines = append(rightContentLines,
-				dimStyle.Render("Globally (adds -g):"),
-				"  "+globalPreview.Command,
-			)
-		} else {
-			rightContentLines = append(rightContentLines, errorStyle.Render("Globally: "+globalPreview.Reason))
-		}
-	} else if len(m.registryResults) > 0 && m.registrySelected >= 0 && m.registrySelected < len(m.registryResults) {
+	if len(m.registryResults) > 0 && m.registrySelected >= 0 && m.registrySelected < len(m.registryResults) {
 		s := m.registryResults[m.registrySelected]
 		status, similarMsg := m.checkRegistrySkillStatus(s)
+
+		if selectedCount > 0 {
+			rightContentLines = append(rightContentLines,
+				lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true).Render(fmt.Sprintf("● Bulk Select: %d skills marked for installation", selectedCount)),
+				"",
+			)
+		}
 
 		rightContentLines = append(rightContentLines,
 			titleStyle.Render(s.DisplayName),
@@ -1882,29 +1901,10 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			formatMetaLine("Installs:", fmt.Sprintf("%d", s.Installs), rightWidth),
 		)
 
-		// Fetch previews
-		projActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
-			DisplayName: s.DisplayName,
-			Slug:        s.Slug,
-			Global:      false,
-		})
-		globalActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
-			DisplayName: s.DisplayName,
-			Slug:        s.Slug,
-			Global:      true,
-		})
-
+		var statusVal string
 		allowInstall := true
 		cantInstallReason := ""
-		if len(projActions) == 0 {
-			allowInstall = false
-			cantInstallReason = "installation configuration failed"
-		} else if !projActions[0].Available {
-			allowInstall = false
-			cantInstallReason = projActions[0].Reason
-		}
 
-		var statusVal string
 		if status == StatusInstalled {
 			statusVal = scopeProjectStyle.Render("[installed] Already installed")
 			allowInstall = false
@@ -1924,24 +1924,72 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			rightContentLines = append(rightContentLines, "", errorStyle.Render(wrapText("Notice: A similar skill named '"+similarMsg+"' is already installed.", rightWidth)))
 		}
 
-		// Install Command previews
 		rightContentLines = append(rightContentLines, "")
 		rightContentLines = append(rightContentLines, sectionHeaderStyle.Render("Install Commands:"), "")
 
-		if !allowInstall && cantInstallReason != "" {
-			rightContentLines = append(rightContentLines, errorStyle.Render(wrapText("Installations disabled: "+cantInstallReason, rightWidth)))
-		} else {
-			if len(projActions) > 0 && projActions[0].Available {
-				rightContentLines = append(rightContentLines,
-					dimStyle.Render("Project-local:"),
-					"  "+projActions[0].Command,
-				)
+		if selectedCount > 0 {
+			var list []actions.AvailableSkillInstall
+			for _, sel := range m.registrySelectedKeys {
+				list = append(list, actions.AvailableSkillInstall{
+					Source:      sel.Source,
+					DisplayName: sel.DisplayName,
+					Slug:        sel.Slug,
+				})
 			}
-			if len(globalActions) > 0 && globalActions[0].Available {
+			projPreview := actions.ForAvailableSkills(list, false)
+			globalPreview := actions.ForAvailableSkills(list, true)
+
+			if projPreview.Available {
 				rightContentLines = append(rightContentLines,
-					dimStyle.Render("Globally (adds -g):"),
-					"  "+globalActions[0].Command,
+					dimStyle.Render("Bulk Project-local:"),
+					"  "+projPreview.Command,
 				)
+			} else {
+				rightContentLines = append(rightContentLines, errorStyle.Render("Bulk Project-local: "+projPreview.Reason))
+			}
+			if globalPreview.Available {
+				rightContentLines = append(rightContentLines,
+					dimStyle.Render("Bulk Globally:"),
+					"  "+globalPreview.Command,
+				)
+			} else {
+				rightContentLines = append(rightContentLines, errorStyle.Render("Bulk Globally: "+globalPreview.Reason))
+			}
+		} else {
+			projActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
+				DisplayName: s.DisplayName,
+				Slug:        s.Slug,
+				Global:      false,
+			})
+			globalActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
+				DisplayName: s.DisplayName,
+				Slug:        s.Slug,
+				Global:      true,
+			})
+
+			if len(projActions) == 0 {
+				allowInstall = false
+				cantInstallReason = "installation configuration failed"
+			} else if !projActions[0].Available {
+				allowInstall = false
+				cantInstallReason = projActions[0].Reason
+			}
+
+			if !allowInstall && cantInstallReason != "" {
+				rightContentLines = append(rightContentLines, errorStyle.Render(wrapText("Installations disabled: "+cantInstallReason, rightWidth)))
+			} else {
+				if len(projActions) > 0 && projActions[0].Available {
+					rightContentLines = append(rightContentLines,
+						dimStyle.Render("Project-local:"),
+						"  "+projActions[0].Command,
+					)
+				}
+				if len(globalActions) > 0 && globalActions[0].Available {
+					rightContentLines = append(rightContentLines,
+						dimStyle.Render("Globally (adds -g):"),
+						"  "+globalActions[0].Command,
+					)
+				}
 			}
 		}
 	} else {
