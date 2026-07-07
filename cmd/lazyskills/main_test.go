@@ -81,7 +81,7 @@ func TestCLIUpdate(t *testing.T) {
 	}
 	// Default channel should be "manual" on unix, or "windows" on windows.
 	// Since we mock it, we just check if it returns one of the guidance/command values.
-	if !strings.Contains(out, "To upgrade, please download") && !strings.Contains(out, "install.sh") {
+	if !strings.Contains(out, "To upgrade, please download") && !strings.Contains(out, "lazyskills.sh/install") {
 		t.Errorf("expected command preview or download guidance, got: %q", out)
 	}
 
