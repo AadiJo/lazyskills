@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/alvinunreal/lazyskills/internal/locks"
 	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/registry"
 	"github.com/alvinunreal/lazyskills/internal/runner"
 )
 
@@ -157,6 +161,38 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePlan = msg.plan
 		m.updatePlanErr = msg.err
 		m.syncViewport()
+	case appUpdateResultMsg:
+		m.updatingApp = false
+		if msg.err != nil {
+			m.updateError = msg.err
+			m.updateSuccess = false
+		} else {
+			m.updateSuccess = true
+			m.updateError = nil
+		}
+		m.syncViewport()
+	case registryDebounceMsg:
+		if msg.generation == m.registryGeneration {
+			m.registryLoading = true
+			return m, m.searchRegistryCmd(msg.query, msg.generation)
+		}
+	case registrySearchMsg:
+		if msg.generation == m.registryGeneration {
+			m.registryLoading = false
+			m.registryResults = msg.results
+			m.registryError = msg.err
+			m.registrySelected = 0
+			m.registryPreviewOffset = 0
+			m.syncViewport()
+			return m, m.currentRegistryPreviewCmd()
+		}
+	case registryPreviewMsg:
+		if m.registryPreviews == nil {
+			m.registryPreviews = make(map[string]string)
+		}
+		m.registryPreviews[msg.key] = msg.content
+		m.syncViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		var postKeyCmd tea.Cmd
@@ -165,6 +201,289 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		}
+		if m.registryModal {
+			if m.registryFocusList {
+				// LIST IS FOCUSED
+				switch key {
+				case "esc":
+					m.registryModal = false
+					m.registryQuery = ""
+					m.registryResults = nil
+					m.registryError = nil
+					m.registryLoading = false
+					m.registrySelectedKeys = nil
+					m.syncViewport()
+					return m, nil
+				case "q":
+					m.registryModal = false
+					m.registryQuery = ""
+					m.registryResults = nil
+					m.registryError = nil
+					m.registryLoading = false
+					m.registrySelectedKeys = nil
+					m.syncViewport()
+					return m, nil
+				case "ctrl+c":
+					return m, tea.Quit
+				case "tab":
+					m.registryFocusList = false
+					m.syncViewport()
+					return m, nil
+				case "ctrl+u":
+					m.registryPreviewOffset -= 6
+					if m.registryPreviewOffset < 0 {
+						m.registryPreviewOffset = 0
+					}
+					m.syncViewport()
+					return m, nil
+				case "ctrl+d":
+					m.registryPreviewOffset += 6
+					m.syncViewport()
+					return m, nil
+				case "up", "k":
+					if m.registryLoading {
+						return m, nil
+					}
+					if len(m.registryResults) > 0 {
+						m.registrySelected--
+						if m.registrySelected < 0 {
+							m.registrySelected = len(m.registryResults) - 1
+						}
+						m.registryPreviewOffset = 0
+						m.syncViewport()
+						return m, m.currentRegistryPreviewCmd()
+					}
+					return m, nil
+				case "down", "j":
+					if m.registryLoading {
+						return m, nil
+					}
+					if len(m.registryResults) > 0 {
+						m.registrySelected++
+						if m.registrySelected >= len(m.registryResults) {
+							m.registrySelected = 0
+						}
+						m.registryPreviewOffset = 0
+						m.syncViewport()
+						return m, m.currentRegistryPreviewCmd()
+					}
+					return m, nil
+				case " ":
+					if m.registryLoading {
+						return m, nil
+					}
+					if len(m.registryResults) > 0 {
+						s := m.registryResults[m.registrySelected]
+						status, _ := m.checkRegistrySkillStatus(s)
+						if status != StatusInstalled && !s.Invalid {
+							if m.registrySelectedKeys == nil {
+								m.registrySelectedKeys = make(map[string]registry.Skill)
+							}
+							key := s.Source + "\x00" + s.Slug
+							if _, exists := m.registrySelectedKeys[key]; exists {
+								delete(m.registrySelectedKeys, key)
+							} else {
+								m.registrySelectedKeys[key] = s
+							}
+							m.syncViewport()
+						}
+					}
+					return m, nil
+				case "enter":
+					if m.registryLoading {
+						return m, nil
+					}
+					// List is focused: start project install confirmation
+					selectedCount := len(m.registrySelectedKeys)
+					if selectedCount > 0 {
+						var list []actions.AvailableSkillInstall
+						for _, s := range m.registrySelectedKeys {
+							list = append(list, actions.AvailableSkillInstall{
+								Source:      s.Source,
+								DisplayName: s.DisplayName,
+								Slug:        s.Slug,
+							})
+						}
+						preview := actions.ForAvailableSkills(list, false)
+						if preview.Available {
+							m.registryModal = false
+							m.pendingAction = &preview
+							m.confirming = true
+							m.confirmInput = ""
+							m.confirmError = ""
+							m.confirmReturnRegistry = true
+							m.syncViewport()
+							return m, nil
+						}
+					} else if len(m.registryResults) > 0 && m.registrySelected >= 0 && m.registrySelected < len(m.registryResults) {
+						s := m.registryResults[m.registrySelected]
+						status, checkMsg := m.checkRegistrySkillStatus(s)
+						if status == StatusInstalled || s.Invalid {
+							// Do not install
+							return m, nil
+						}
+						// Build preview
+						previews := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
+							DisplayName: s.DisplayName,
+							Slug:        s.Slug,
+							Global:      false,
+						})
+						if len(previews) > 0 && previews[0].Available {
+							m.registryModal = false
+							armed := previews[0]
+							if status == StatusSimilarInstalled {
+								armed.Description += " (Warning: A similar skill named '" + checkMsg + "' is already installed)."
+							}
+							m.pendingAction = &armed
+							m.confirming = true
+							m.confirmInput = ""
+							m.confirmError = ""
+							m.confirmReturnRegistry = true
+							m.syncViewport()
+							return m, nil
+						}
+					}
+					return m, nil
+				case "g":
+					if m.registryLoading {
+						return m, nil
+					}
+					// list focused: start global install confirmation
+					selectedCount := len(m.registrySelectedKeys)
+					if selectedCount > 0 {
+						var list []actions.AvailableSkillInstall
+						for _, s := range m.registrySelectedKeys {
+							list = append(list, actions.AvailableSkillInstall{
+								Source:      s.Source,
+								DisplayName: s.DisplayName,
+								Slug:        s.Slug,
+							})
+						}
+						preview := actions.ForAvailableSkills(list, true)
+						if preview.Available {
+							m.registryModal = false
+							m.pendingAction = &preview
+							m.confirming = true
+							m.confirmInput = ""
+							m.confirmError = ""
+							m.confirmReturnRegistry = true
+							m.syncViewport()
+							return m, nil
+						}
+					} else if len(m.registryResults) > 0 && m.registrySelected >= 0 && m.registrySelected < len(m.registryResults) {
+						s := m.registryResults[m.registrySelected]
+						status, checkMsg := m.checkRegistrySkillStatus(s)
+						if status == StatusInstalled || s.Invalid {
+							// Do not install
+							return m, nil
+						}
+						previews := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
+							DisplayName: s.DisplayName,
+							Slug:        s.Slug,
+							Global:      true,
+						})
+						if len(previews) > 0 && previews[0].Available {
+							m.registryModal = false
+							armed := previews[0]
+							if status == StatusSimilarInstalled {
+								armed.Description += " (Warning: A similar skill named '" + checkMsg + "' is already installed)."
+							}
+							m.pendingAction = &armed
+							m.confirming = true
+							m.confirmInput = ""
+							m.confirmError = ""
+							m.confirmReturnRegistry = true
+							m.syncViewport()
+							return m, nil
+						}
+					}
+					return m, nil
+				}
+				// List is focused: ignore any other keypresses (no character typing)
+				return m, nil
+			} else {
+				// SEARCH INPUT IS FOCUSED
+				switch key {
+				case "esc":
+					m.registryModal = false
+					m.registryQuery = ""
+					m.registryResults = nil
+					m.registryError = nil
+					m.registryLoading = false
+					m.registrySelectedKeys = nil
+					m.syncViewport()
+					return m, nil
+				case "ctrl+c":
+					return m, tea.Quit
+				case "tab":
+					m.registryFocusList = true
+					m.syncViewport()
+					return m, nil
+				case "ctrl+u":
+					m.registryPreviewOffset -= 6
+					if m.registryPreviewOffset < 0 {
+						m.registryPreviewOffset = 0
+					}
+					m.syncViewport()
+					return m, nil
+				case "ctrl+d":
+					m.registryPreviewOffset += 6
+					m.syncViewport()
+					return m, nil
+				case "enter":
+					if len(m.registryQuery) >= 2 && (m.registryError != nil || len(m.registryResults) == 0) {
+						m.registryGeneration++
+						m.registryLoading = true
+						m.syncViewport()
+						return m, m.searchRegistryCmd(m.registryQuery, m.registryGeneration)
+					}
+					if len(m.registryResults) > 0 {
+						m.registryFocusList = true
+						m.syncViewport()
+					}
+					return m, nil
+				case "backspace", "ctrl+h":
+					if len(m.registryQuery) > 0 {
+						m.registryQuery = m.registryQuery[:len(m.registryQuery)-1]
+					}
+					m.registrySelected = 0
+					m.registryPreviewOffset = 0
+					m.registryGeneration++
+					if len(m.registryQuery) >= 2 {
+						m.registryLoading = true
+						m.syncViewport()
+						return m, scheduleRegistrySearch(m.registryQuery, m.registryGeneration)
+					} else {
+						m.registryResults = nil
+						m.registryError = nil
+						m.registryLoading = false
+						m.registrySelectedKeys = nil
+						m.syncViewport()
+						return m, nil
+					}
+				default:
+					if len(key) == 1 {
+						m.registryQuery += key
+						m.registrySelected = 0
+						m.registryPreviewOffset = 0
+						m.registryGeneration++
+						if len(m.registryQuery) >= 2 {
+							m.registryLoading = true
+							m.syncViewport()
+							return m, scheduleRegistrySearch(m.registryQuery, m.registryGeneration)
+						} else {
+							m.registryResults = nil
+							m.registryError = nil
+							m.registryLoading = false
+							m.registrySelectedKeys = nil
+							m.syncViewport()
+							return m, nil
+						}
+					}
+				}
+				return m, nil
+			}
 		}
 		if m.appUpdateModal {
 			switch key {
@@ -328,7 +647,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmInput = ""
 				m.confirmError = ""
 				m.pendingAction = nil
-				if m.confirmReturnDetailModal {
+				if m.confirmReturnRegistry {
+					m.registryModal = true
+					m.confirmReturnRegistry = false
+				} else if m.confirmReturnDetailModal {
 					m.detailModal = true
 					m.modalSource = m.confirmReturnModalSource
 					m.modalSelected = m.confirmReturnModalSelected
@@ -490,6 +812,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpOpen = true
 		case "U":
 			m.appUpdateModal = true
+			m.syncViewport()
+		case "n":
+			m = m.openRegistryModal()
 			m.syncViewport()
 		case "c":
 			m.commands = !m.commands
@@ -1056,6 +1381,11 @@ func confirmationError(action actions.CommandPreview) string {
 
 func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.Cmd) {
 	m.commands = false
+	if action.Exec.Internal == "find_new_skills" {
+		m = m.openRegistryModal()
+		m.syncViewport()
+		return m, nil
+	}
 	if action.ID == "source_discover" {
 		m.actionResult = nil
 		return m.startDiscovery(action.ConfirmValue, true)
@@ -1322,6 +1652,20 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		partialSuccess := cleanupLockAfterRemove(action, m.cwd, &result)
 		return actionResultMsg{result: result, mutates: action.Mutates, partialSuccess: partialSuccess}
 	}
+}
+
+func (m appModel) openRegistryModal() appModel {
+	m.registryModal = true
+	m.registryQuery = ""
+	m.registryResults = nil
+	m.registrySelected = 0
+	m.registryError = nil
+	m.registryLoading = false
+	m.registryFocusList = false
+	m.registrySelectedKeys = nil
+	m.registryPreviewOffset = 0
+	m.registryGeneration++
+	return m
 }
 
 func cleanupLockAfterRemove(action actions.CommandPreview, cwd string, result *runner.Result) bool {
@@ -1611,4 +1955,120 @@ func insertToggleActions(previews, toggleActions []actions.CommandPreview) []act
 	out = append(out, toggleActions...)
 	out = append(out, previews[insertAt:]...)
 	return out
+}
+func (m appModel) searchRegistryCmd(query string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		client := registry.NewClient()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		results, err := client.Search(ctx, query, 10)
+		return registrySearchMsg{
+			generation: gen,
+			results:    results,
+			err:        err,
+		}
+	}
+}
+
+func scheduleRegistrySearch(query string, generation int) tea.Cmd {
+	return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+		return registryDebounceMsg{generation: generation, query: query}
+	})
+}
+
+type registryPreviewMsg struct {
+	key     string
+	content string
+}
+
+func deriveRawGitHubURLs(source string) []string {
+	repo, folder := parseSourceURLDetails(source)
+	parts := strings.Split(repo, "/")
+	if len(parts) < 2 {
+		return nil
+	}
+	owner, name := parts[0], parts[1]
+
+	var urls []string
+	branches := []string{"main", "master"}
+	files := []string{"SKILL.md", "README.md", "README"}
+
+	for _, branch := range branches {
+		for _, file := range files {
+			var path string
+			if folder != "" {
+				path = folder + "/" + file
+			} else {
+				path = file
+			}
+			urls = append(urls, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, name, branch, path))
+		}
+	}
+	return urls
+}
+
+func (m appModel) fetchRegistryPreviewCmd(key string, source string) tea.Cmd {
+	return func() tea.Msg {
+		urls := deriveRawGitHubURLs(source)
+		if len(urls) == 0 {
+			return registryPreviewMsg{key: key, content: ""}
+		}
+
+		client := &http.Client{Timeout: 3 * time.Second}
+		for _, u := range urls {
+			req, err := http.NewRequest("GET", u, nil)
+			if err != nil {
+				continue
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			content, ok := readRegistryPreviewResponse(resp)
+			if ok {
+				return registryPreviewMsg{key: key, content: content}
+			}
+		}
+		return registryPreviewMsg{key: key, content: ""}
+	}
+}
+
+func readRegistryPreviewResponse(resp *http.Response) (string, bool) {
+	if resp.Body == nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil || len(bodyBytes) == 0 {
+		return "", false
+	}
+	return compat.SanitizePreviewContent(string(bodyBytes)), true
+}
+
+func (m appModel) currentRegistryPreviewCmd() tea.Cmd {
+	if len(m.registryResults) == 0 || m.registrySelected < 0 || m.registrySelected >= len(m.registryResults) {
+		return nil
+	}
+	s := m.registryResults[m.registrySelected]
+	key := s.Source + "\x00" + s.Slug
+	if m.registryPreviews != nil {
+		if _, exists := m.registryPreviews[key]; exists {
+			return nil
+		}
+	}
+	for _, disc := range m.discovery {
+		if disc.Status == DiscoveryReady {
+			for _, ds := range disc.Skills {
+				if compat.NormalizeName(ds.Name) == compat.NormalizeName(s.DisplayName) || compat.NormalizeName(ds.Name) == compat.NormalizeName(s.Slug) {
+					if ds.Preview != "" || ds.Description != "" {
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return m.fetchRegistryPreviewCmd(key, s.Source)
 }

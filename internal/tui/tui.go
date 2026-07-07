@@ -11,6 +11,7 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
+	"github.com/alvinunreal/lazyskills/internal/registry"
 	"github.com/alvinunreal/lazyskills/internal/runner"
 	"github.com/alvinunreal/lazyskills/internal/scan"
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
@@ -105,6 +106,21 @@ type appModel struct {
 	updatePlan                 *selfupdate.UpdatePlan
 	updatePlanErr              error
 	appUpdateModal             bool
+	updatingApp                bool
+	updateSuccess              bool
+	updateError                error
+	registryModal              bool
+	registryQuery              string
+	registryLoading            bool
+	registryResults            []registry.Skill
+	registrySelected           int
+	registryError              error
+	registryGeneration         int
+	registryFocusList          bool
+	registrySelectedKeys       map[string]registry.Skill
+	registryPreviews           map[string]string
+	registryPreviewOffset      int
+	confirmReturnRegistry      bool
 }
 
 type paneLayout struct {
@@ -131,12 +147,13 @@ const (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	borderStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	warningStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	titleStyle            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	borderStyle           = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	selectedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	inactiveSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("238"))
+	dimStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errorStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	warningStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 
 	// Scope tags: project=cyan, global=magenta.
 	scopeProjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
@@ -186,6 +203,21 @@ type updatePlanMsg struct {
 	err  error
 }
 
+type appUpdateResultMsg struct {
+	err error
+}
+
+type registryDebounceMsg struct {
+	generation int
+	query      string
+}
+
+type registrySearchMsg struct {
+	generation int
+	results    []registry.Skill
+	err        error
+}
+
 func Run(cwd string) error {
 	program := tea.NewProgram(newModel(cwd), tea.WithAltScreen())
 	_, err := program.Run()
@@ -201,6 +233,7 @@ func newModel(cwd string) appModel {
 		collapsedGroups:  make(map[string]bool),
 		discovery:        make(map[string]SourceDiscovery),
 		previewCache:     make(map[previewCacheKey][]string),
+		registryPreviews: make(map[string]string),
 	}
 }
 
