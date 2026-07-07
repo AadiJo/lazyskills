@@ -24,7 +24,7 @@ jobs:
       - run: go vet ./...
       - name: Check for dead code
         run: |
-          dead=$(go run golang.org/x/tools/cmd/deadcode@v0.46.0 -test ./...)
+          dead=$(GOTOOLCHAIN=local go run golang.org/x/tools/cmd/deadcode@v0.46.0 -test ./...)
           if [ -n "$dead" ]; then
             echo "Unreachable (dead) code found:"
             echo "$dead"
