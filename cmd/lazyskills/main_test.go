@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -23,10 +22,6 @@ func (m *mockFetcher) FetchRelease(ctx context.Context, url string) (*selfupdate
 		return nil, m.releaseErr
 	}
 	return m.release, nil
-}
-
-func (m *mockFetcher) Download(ctx context.Context, url string) ([]byte, error) {
-	return nil, fmt.Errorf("not implemented")
 }
 
 func TestCLIUpdate(t *testing.T) {
@@ -81,11 +76,12 @@ func TestCLIUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if strings.Contains(out, "lazyskills update --yes") {
+		t.Errorf("print-command must not advertise removed self-update command, got: %q", out)
+	}
 	// Default channel should be "manual" on unix, or "windows" on windows.
 	// Since we mock it, we just check if it returns one of the guidance/command values.
-	if !strings.Contains(out, "lazyskills update") &&
-		!strings.Contains(out, "To upgrade, please download") &&
-		!strings.Contains(out, "Please download the release manually") {
+	if !strings.Contains(out, "To upgrade, please download") && !strings.Contains(out, "install.sh") {
 		t.Errorf("expected command preview or download guidance, got: %q", out)
 	}
 
@@ -98,9 +94,17 @@ func TestCLIUpdate(t *testing.T) {
 		t.Errorf("expected default output to mention Update available, got: %q", out)
 	}
 
-	// 4. --yes with CanExecute = false check (if we mock it to a managed channel like brew)
-	// We can test this by changing the channel of the executable.
-	// Let's verify already up-to-date behavior.
+	// 4. Test --yes returns non-zero error before calling Plan
+	_, errYes := captureStdout([]string{"update", "--yes"})
+	if errYes == nil {
+		t.Fatal("expected error with --yes, got nil")
+	}
+	expectedErrMsg := "automatic updates have been removed; run lazyskills update for manual upgrade instructions"
+	if !strings.Contains(errYes.Error(), expectedErrMsg) {
+		t.Errorf("expected error message to contain %q, got: %v", expectedErrMsg, errYes)
+	}
+
+	// 5. Already up-to-date behavior.
 	buildinfo.Version = "v1.1.0"
 	out, err = captureStdout([]string{"update"})
 	if err != nil {
@@ -110,7 +114,7 @@ func TestCLIUpdate(t *testing.T) {
 		t.Errorf("expected already up to date, got: %q", out)
 	}
 
-	// 5. Test LAZYSKILLS_NO_UPDATE_CHECK prints the disable reason instead of Already up to date
+	// 6. Test LAZYSKILLS_NO_UPDATE_CHECK prints the disable reason instead of Already up to date
 	os.Setenv("LAZYSKILLS_NO_UPDATE_CHECK", "1")
 	defer os.Setenv("LAZYSKILLS_NO_UPDATE_CHECK", "")
 	out, err = captureStdout([]string{"update"})

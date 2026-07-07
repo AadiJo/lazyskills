@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1630,13 +1629,13 @@ func (m appModel) appUpdateModalOverlay(layout appLayout) string {
 	}
 
 	var sections []string
-	sections = append(sections, titleStyle.Render(" LazySkills App Update "))
+	sections = append(sections, titleStyle.Render(" LazySkills Update "))
 	sections = append(sections, "")
 
 	plan := m.updatePlan
 	if m.updatePlanErr != nil {
 		sections = append(sections, errorStyle.Render("✗ Update check failed:"))
-		sections = append(sections, wrapText(m.updatePlanErr.Error(), modalWidth-4))
+		sections = append(sections, wrapText(compat.SanitizeMetadata(m.updatePlanErr.Error()), modalWidth-4))
 		sections = append(sections, "")
 		sections = append(sections, dimStyle.Render("esc/q close"))
 	} else if plan == nil {
@@ -1644,63 +1643,42 @@ func (m appModel) appUpdateModalOverlay(layout appLayout) string {
 		sections = append(sections, "")
 		sections = append(sections, dimStyle.Render("esc/q close"))
 	} else {
-		sections = append(sections, fmt.Sprintf("Current Version: %s", plan.Current))
-		sections = append(sections, fmt.Sprintf("Latest Version:  %s", plan.Latest))
-		sections = append(sections, fmt.Sprintf("Install Channel: %s", plan.Channel))
+		sections = append(sections, fmt.Sprintf("Current Version: %s", compat.SanitizeMetadata(plan.Current)))
+		sections = append(sections, fmt.Sprintf("Latest Version:  %s", compat.SanitizeMetadata(plan.Latest)))
+		sections = append(sections, fmt.Sprintf("Install Channel: %s", compat.SanitizeMetadata(plan.Channel)))
 		sections = append(sections, "")
 
-		if m.updatingApp {
-			sections = append(sections, runningStyle.Render("Updating... Please wait."))
-			sections = append(sections, "Downloading archive and verifying checksum...")
-		} else if m.updateSuccess {
-			sections = append(sections, successStyle.Render("✓ Update successful!"))
-			sections = append(sections, "Please restart lazyskills to apply the update.")
-			sections = append(sections, "")
-			sections = append(sections, dimStyle.Render("esc/q close"))
-		} else if m.updateError != nil {
-			sections = append(sections, errorStyle.Render("✗ Update failed:"))
-			sections = append(sections, wrapText(m.updateError.Error(), modalWidth-4))
-			sections = append(sections, "")
-
-			var channel string
-			if plan != nil {
-				channel = plan.Channel
+		if plan.Status == selfupdate.StatusAlreadyLatest {
+			sections = append(sections, "You are already running the latest version.")
+		} else if plan.Status == selfupdate.StatusUnknown {
+			sections = append(sections, "Update check status is unknown.")
+			if plan.Reason != "" {
+				sections = append(sections, compat.SanitizeMetadata(plan.Reason))
 			}
-			instruction, cmd := selfupdate.RecoveryAdvice(channel, runtime.GOOS)
-			if cmd != "" {
-				sections = append(sections, instruction)
-				sections = append(sections, lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Render("  "+cmd))
-				sections = append(sections, "")
-			}
-
-			sections = append(sections, dimStyle.Render("enter retry · esc/q close"))
 		} else {
-			if plan.CanExecute {
-				sections = append(sections, "A newer version is available. Would you like to update?")
+			sections = append(sections, "A newer version of LazySkills is available.")
+			sections = append(sections, "")
+
+			if plan.ReleaseNotes != "" {
+				sections = append(sections, sectionHeaderStyle.Render("Release Notes:"), truncateReleaseNotes(compat.SanitizePreviewContent(plan.ReleaseNotes), modalWidth-4), "")
+			}
+
+			if plan.Reason != "" {
+				sections = append(sections, compat.SanitizeMetadata(plan.Reason))
+			}
+
+			if plan.CommandPreview != "" {
+				sections = append(sections, "To update manually, run:")
+				sections = append(sections, lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Render("  "+compat.SanitizeMetadata(plan.CommandPreview)))
 				sections = append(sections, "")
-				if plan.ReleaseNotes != "" {
-					sections = append(sections, sectionHeaderStyle.Render("Release Notes:"), truncateReleaseNotes(plan.ReleaseNotes, modalWidth-4), "")
-				}
-				sections = append(sections, "enter start update · esc/q cancel")
-			} else {
-				if plan.Status == selfupdate.StatusAlreadyLatest {
-					sections = append(sections, "You are already running the latest version.")
-				} else if plan.Status == selfupdate.StatusUnknown {
-					sections = append(sections, "Update check status is unknown.")
-					sections = append(sections, plan.Reason)
-				} else {
-					sections = append(sections, "Auto-update is not supported for this install channel.")
-					sections = append(sections, plan.Reason)
-					if plan.CommandPreview != "" {
-						sections = append(sections, "")
-						sections = append(sections, "To upgrade, run:")
-						sections = append(sections, lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Render("  "+plan.CommandPreview))
-					}
-				}
+			}
+			if plan.ReleaseURL != "" {
+				sections = append(sections, "For more details and manual downloads, visit:")
+				sections = append(sections, lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render("  "+compat.SanitizeMetadata(plan.ReleaseURL)))
 				sections = append(sections, "")
-				sections = append(sections, dimStyle.Render("esc/q close"))
 			}
 		}
+		sections = append(sections, dimStyle.Render("esc/q close"))
 	}
 
 	box := lipgloss.NewStyle().

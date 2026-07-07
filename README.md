@@ -98,29 +98,26 @@ LazySkills previews actions before running them, and destructive actions require
 
 ## 🔄 Updates
 
-Keep LazySkills up to date using the built-in update command or the TUI interface.
+LazySkills can check for new releases and show the command to update your installation manually.
 
 ### CLI Update
 
-Run the update command directly from your terminal:
+Run the update command directly from your terminal to check for updates and get upgrade instructions:
 
 ```bash
 lazyskills update
 ```
 
 Options:
-* `--check`: Query if a newer version is available without downloading or printing commands. Exits 0.
+* `--check`: Query if a newer version is available. Exits 0 if status is checked cleanly.
 * `--print-command`: Print the command required to upgrade on your channel (e.g. `brew upgrade`) and exit.
-* `--yes`: Automatically perform the update if supported by the installation channel (direct Unix manual binary installations only).
 
 ### TUI Update
 
-When a newer version of LazySkills is available, an update notification will automatically appear in the TUI footer:
+When a newer version of LazySkills is available, an update notification will appear in the TUI footer:
 `· U update (vX.Y.Z available)`
 
-Press **`U`** (capital U) from the inventory view to open the update flow:
-* For **manual binary installs** on macOS/Linux, you can perform the update directly inside the TUI.
-* For **managed package installs** (like Homebrew, Scoop, WinGet, deb, or rpm packages), the TUI will display the specific terminal command you need to run to upgrade.
+Press **`U`** (capital U) from the inventory view to open the update info modal, which will display the release details and the specific terminal command you need to run to upgrade manually.
 
 ## ⭐ Star for a chance to win stickers
 

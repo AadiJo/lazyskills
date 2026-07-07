@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,7 +15,6 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/locks"
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/runner"
-	"github.com/alvinunreal/lazyskills/internal/selfupdate"
 )
 
 const previewRefreshDelay = 300 * time.Millisecond
@@ -159,16 +157,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePlan = msg.plan
 		m.updatePlanErr = msg.err
 		m.syncViewport()
-	case appUpdateResultMsg:
-		m.updatingApp = false
-		if msg.err != nil {
-			m.updateError = msg.err
-			m.updateSuccess = false
-		} else {
-			m.updateSuccess = true
-			m.updateError = nil
-		}
-		m.syncViewport()
 	case tea.KeyMsg:
 		key := msg.String()
 		var postKeyCmd tea.Cmd
@@ -182,19 +170,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch key {
 			case "esc", "q":
 				m.appUpdateModal = false
-				m.updateError = nil
-				m.updateSuccess = false
 				m.syncViewport()
 			case "ctrl+c":
 				return m, tea.Quit
-			case "enter":
-				if m.updatePlan != nil && m.updatePlan.CanExecute && !m.updatingApp && !m.updateSuccess {
-					m.updatingApp = true
-					m.updateError = nil
-					m.updateSuccess = false
-					m.syncViewport()
-					return m, m.applyUpdateCmd()
-				}
 			}
 			return m, nil
 		}
@@ -512,9 +490,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpOpen = true
 		case "U":
 			m.appUpdateModal = true
-			m.updatingApp = false
-			m.updateSuccess = false
-			m.updateError = nil
 			m.syncViewport()
 		case "c":
 			m.commands = !m.commands
@@ -1636,13 +1611,4 @@ func insertToggleActions(previews, toggleActions []actions.CommandPreview) []act
 	out = append(out, toggleActions...)
 	out = append(out, previews[insertAt:]...)
 	return out
-}
-
-func (m appModel) applyUpdateCmd() tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		err := selfupdate.Apply(ctx, m.updatePlan, nil)
-		return appUpdateResultMsg{err: err}
-	}
 }
