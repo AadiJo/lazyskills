@@ -684,8 +684,8 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 		"https://github.com/my-org/my-repo/skills/my-folder\x00my-display-name": m.registryResults[0],
 	}
 	viewSelected := m.View()
-	if !strings.Contains(viewSelected, ">*My Display Name") {
-		t.Errorf("expected selected marker to replace reserved blank as '>*', got view:\n%s", viewSelected)
+	if !strings.Contains(viewSelected, ">●My Display Name") {
+		t.Errorf("expected selected marker to replace reserved blank as '>●', got view:\n%s", viewSelected)
 	}
 	m.registrySelectedKeys = nil
 	// Verify parsed Repository/Folder and matched Description in Right Pane
@@ -713,6 +713,43 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 	viewStr2 := mClone.View()
 	if !strings.Contains(viewStr2, "Target agents") || !strings.Contains(viewStr2, "all detected") {
 		t.Errorf("expected confirmation view to explicitly state target agents, got:\n%s", viewStr2)
+	}
+}
+
+func TestTUIRegistryPreviewScroll(t *testing.T) {
+	m := newModel("")
+	m.width = 120
+	m.height = 30
+	m.registryModal = true
+	m.registryQuery = "xyz"
+	m.registryResults = []registry.Skill{
+		{DisplayName: "Long Preview", Slug: "long-preview", Source: "https://github.com/my-org/my-repo/skills/long-preview"},
+	}
+	m.registrySelected = 0
+	m.registryFocusList = true
+	key := "https://github.com/my-org/my-repo/skills/long-preview" + "\x00" + "long-preview"
+	longPreview := []string{"# Long Preview"}
+	for i := 1; i <= 40; i++ {
+		longPreview = append(longPreview, fmt.Sprintf("- line %02d with enough words to stay visible as its own preview row", i))
+	}
+	m.registryPreviews[key] = strings.Join(longPreview, "\n")
+
+	viewTop := m.View()
+	if !strings.Contains(viewTop, "ctrl-u/d scroll") {
+		t.Fatalf("expected scroll indicator for long preview, got:\n%s", viewTop)
+	}
+	if strings.Contains(viewTop, "line 40") {
+		t.Fatalf("expected long preview not to show final line before scrolling")
+	}
+
+	modelTmp, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = modelTmp.(appModel)
+	if m.registryPreviewOffset == 0 {
+		t.Fatal("expected ctrl-d to scroll registry preview")
+	}
+	viewScrolled := m.View()
+	if !strings.Contains(viewScrolled, "line 06") && !strings.Contains(viewScrolled, "line 07") {
+		t.Fatalf("expected scrolled preview content, got:\n%s", viewScrolled)
 	}
 }
 

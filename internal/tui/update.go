@@ -182,6 +182,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.registryResults = msg.results
 			m.registryError = msg.err
 			m.registrySelected = 0
+			m.registryPreviewOffset = 0
 			m.syncViewport()
 			return m, m.currentRegistryPreviewCmd()
 		}
@@ -229,6 +230,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.registryFocusList = false
 					m.syncViewport()
 					return m, nil
+				case "ctrl+u":
+					m.registryPreviewOffset -= 6
+					if m.registryPreviewOffset < 0 {
+						m.registryPreviewOffset = 0
+					}
+					m.syncViewport()
+					return m, nil
+				case "ctrl+d":
+					m.registryPreviewOffset += 6
+					m.syncViewport()
+					return m, nil
 				case "up", "k":
 					if m.registryLoading {
 						return m, nil
@@ -238,6 +250,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.registrySelected < 0 {
 							m.registrySelected = len(m.registryResults) - 1
 						}
+						m.registryPreviewOffset = 0
 						m.syncViewport()
 						return m, m.currentRegistryPreviewCmd()
 					}
@@ -251,6 +264,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.registrySelected >= len(m.registryResults) {
 							m.registrySelected = 0
 						}
+						m.registryPreviewOffset = 0
 						m.syncViewport()
 						return m, m.currentRegistryPreviewCmd()
 					}
@@ -406,6 +420,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.registryFocusList = true
 					m.syncViewport()
 					return m, nil
+				case "ctrl+u":
+					m.registryPreviewOffset -= 6
+					if m.registryPreviewOffset < 0 {
+						m.registryPreviewOffset = 0
+					}
+					m.syncViewport()
+					return m, nil
+				case "ctrl+d":
+					m.registryPreviewOffset += 6
+					m.syncViewport()
+					return m, nil
 				case "enter":
 					if len(m.registryQuery) >= 2 && (m.registryError != nil || len(m.registryResults) == 0) {
 						m.registryGeneration++
@@ -423,6 +448,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.registryQuery = m.registryQuery[:len(m.registryQuery)-1]
 					}
 					m.registrySelected = 0
+					m.registryPreviewOffset = 0
 					m.registryGeneration++
 					if len(m.registryQuery) >= 2 {
 						m.registryLoading = true
@@ -440,6 +466,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(key) == 1 {
 						m.registryQuery += key
 						m.registrySelected = 0
+						m.registryPreviewOffset = 0
 						m.registryGeneration++
 						if len(m.registryQuery) >= 2 {
 							m.registryLoading = true
@@ -1636,6 +1663,7 @@ func (m appModel) openRegistryModal() appModel {
 	m.registryLoading = false
 	m.registryFocusList = false
 	m.registrySelectedKeys = nil
+	m.registryPreviewOffset = 0
 	m.registryGeneration++
 	return m
 }

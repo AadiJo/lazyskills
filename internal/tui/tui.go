@@ -119,6 +119,7 @@ type appModel struct {
 	registryFocusList          bool
 	registrySelectedKeys       map[string]registry.Skill
 	registryPreviews           map[string]string
+	registryPreviewOffset      int
 	confirmReturnRegistry      bool
 }
 

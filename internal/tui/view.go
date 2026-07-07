@@ -798,11 +798,33 @@ func appendRegistryPreviewLines(lines []string, title string, markdown string, w
 		return lines
 	}
 	rendered := renderMarkdownPreview(markdown, width)
-	if len(rendered) > maxLines {
-		rendered = append(rendered[:maxLines], dimStyle.Render("…"))
-	}
 	lines = append(lines, "", sectionHeaderStyle.Render(title))
 	return append(lines, rendered...)
+}
+
+func scrollableFitLines(s string, height int, offset int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= height {
+		return s
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	visibleHeight := height - 1
+	if visibleHeight <= 0 {
+		return dimStyle.Render("… ctrl-u/d")
+	}
+	maxOffset := len(lines) - visibleHeight
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	end := offset + visibleHeight
+	visible := append([]string{}, lines[offset:end]...)
+	visible = append(visible, dimStyle.Render(fmt.Sprintf("… %d-%d/%d · ctrl-u/d scroll", offset+1, end, len(lines))))
+	return strings.Join(visible, "\n")
 }
 
 func stripMarkdownFrontmatter(markdown string) string {
@@ -1859,7 +1881,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			}
 			selectMarker := " "
 			if isSel {
-				selectMarker = "*"
+				selectMarker = "●"
 			}
 			prefix := focusMarker + selectMarker
 			prefixWidth := lipgloss.Width(prefix)
@@ -2053,7 +2075,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		rightContentLines = append(rightContentLines, dimStyle.Render("Select a registry search result to view details."))
 	}
 
-	rightPane := fitLines(strings.Join(rightContentLines, "\n"), innerHeight)
+	rightPane := scrollableFitLines(strings.Join(rightContentLines, "\n"), innerHeight, m.registryPreviewOffset)
 
 	// Vertical divider
 	var dividerLines []string
@@ -2112,7 +2134,7 @@ func (m appModel) registryModalHelpLine() string {
 			parts = append(parts, "install unavailable")
 		}
 	}
-	parts = append(parts, "tab back", "esc close")
+	parts = append(parts, "ctrl-u/d preview", "tab back", "esc close")
 	return strings.Join(parts, " · ")
 }
 
