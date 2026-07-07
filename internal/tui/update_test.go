@@ -2,13 +2,11 @@ package tui
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestTUIFooterUpdateNotice(t *testing.T) {
@@ -28,15 +26,14 @@ func TestTUIFooterUpdateNotice(t *testing.T) {
 		Current: "v1.0.0",
 		Latest:  "v1.1.0",
 		Status:  selfupdate.StatusAvailable,
-		Channel: "manual",
 	}
-
 	footer = m.footerText(120, m.visibleRows(), m.currentActions())
 	if !strings.Contains(footer, "U update") || !strings.Contains(footer, "v1.1.0 available") {
 		t.Errorf("expected update notice in footer, got: %q", footer)
 	}
 
 	// 3. Notice omitted if width is too narrow
+	m.width = 40
 	footerNarrow := m.footerText(40, m.visibleRows(), m.currentActions())
 	if strings.Contains(footerNarrow, "U update") {
 		t.Errorf("expected update notice to be omitted in narrow viewport, got: %q", footerNarrow)
@@ -49,11 +46,11 @@ func TestTUIAppUpdateModalTransitions(t *testing.T) {
 	m.width = 100
 	m.height = 30
 	m.updatePlan = &selfupdate.UpdatePlan{
-		Current:    "v1.0.0",
-		Latest:     "v1.1.0",
-		Status:     selfupdate.StatusAvailable,
-		Channel:    "manual",
-		CanExecute: true,
+		Current:        "v1.0.0",
+		Latest:         "v1.1.0",
+		Status:         selfupdate.StatusAvailable,
+		Channel:        "manual",
+		CommandPreview: "curl -fsSL https://raw.githubusercontent.com/alvinunreal/lazyskills/main/scripts/install.sh | sh",
 	}
 
 	// 1. Pressing 'U' opens the modal
@@ -68,7 +65,7 @@ func TestTUIAppUpdateModalTransitions(t *testing.T) {
 
 	// 2. View of modal
 	viewOut := m.View()
-	if !strings.Contains(viewOut, "LazySkills App Update") {
+	if !strings.Contains(viewOut, "LazySkills Update") {
 		t.Errorf("expected app update view header, got: %s", viewOut)
 	}
 	if !strings.Contains(viewOut, "Current Version: v1.0.0") {
@@ -78,35 +75,17 @@ func TestTUIAppUpdateModalTransitions(t *testing.T) {
 		t.Errorf("expected latest version in view, got: %s", viewOut)
 	}
 
-	// 3. Pressing Enter starts update execution
+	// 3. Pressing Enter does not trigger any update execution command
 	modelTmp, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = modelTmp.(appModel)
-	if !m.updatingApp {
-		t.Error("expected updatingApp to be true after pressing Enter")
+	if cmd != nil {
+		t.Errorf("expected no command on Enter, got: %v", cmd)
 	}
-	if cmd == nil {
-		t.Fatal("expected update command to be scheduled, got nil")
-	}
-
-	// 4. Update result message handler success
-	modelTmp, cmd = m.Update(appUpdateResultMsg{err: nil})
-	m = modelTmp.(appModel)
-	if m.updatingApp {
-		t.Error("expected updatingApp to be false after completion")
-	}
-	if !m.updateSuccess {
-		t.Error("expected updateSuccess to be true after nil err result")
-	}
-	if m.updateError != nil {
-		t.Errorf("expected no updateError, got: %v", m.updateError)
+	if !m.appUpdateModal {
+		t.Error("expected modal to remain open on Enter")
 	}
 
-	viewSuccess := m.View()
-	if !strings.Contains(viewSuccess, "Update successful") {
-		t.Errorf("expected success message in view, got: %s", viewSuccess)
-	}
-
-	// 5. Esc closes modal
+	// 4. Esc closes modal
 	modelTmp, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = modelTmp.(appModel)
 	if m.appUpdateModal {
@@ -125,7 +104,6 @@ func TestTUIAppUpdateModalNonActionable(t *testing.T) {
 		Status:         selfupdate.StatusAvailable,
 		Channel:        "brew",
 		Confidence:     "high",
-		CanExecute:     false,
 		CommandPreview: "brew upgrade lazyskills",
 		Reason:         "Homebrew managed install. Please upgrade using Homebrew.",
 	}
@@ -137,23 +115,23 @@ func TestTUIAppUpdateModalNonActionable(t *testing.T) {
 		t.Fatal("expected modal to open")
 	}
 
-	// Check that we see the guidance command instead of an update trigger
+	// Check that we see the guidance command and the manual update text
 	viewOut := m.View()
-	if !strings.Contains(viewOut, "Auto-update is not supported for this install channel.") {
-		t.Errorf("expected unsupported guidance, got: %s", viewOut)
+	if !strings.Contains(viewOut, "A newer version of LazySkills is available.") {
+		t.Errorf("expected new version available copy, got: %s", viewOut)
+	}
+	if !strings.Contains(viewOut, "To update manually, run:") {
+		t.Errorf("expected manual update run copy, got: %s", viewOut)
 	}
 	if !strings.Contains(viewOut, "brew upgrade lazyskills") {
 		t.Errorf("expected command preview in guidance view, got: %s", viewOut)
 	}
 
-	// Pressing Enter does not trigger update since CanExecute is false
+	// Pressing Enter does not trigger update
 	modelTmp, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = modelTmp.(appModel)
-	if m.updatingApp {
-		t.Error("should not set updatingApp to true when CanExecute is false")
-	}
 	if cmd != nil {
-		t.Error("should not return a command when CanExecute is false")
+		t.Error("should not return a command on Enter")
 	}
 }
 
@@ -185,60 +163,5 @@ func TestTUIAppUpdateModalStates(t *testing.T) {
 	viewOut = m.View()
 	if !strings.Contains(viewOut, "Update check failed") || !strings.Contains(viewOut, "sample query error") {
 		t.Errorf("expected error message to be surfaced, got: %s", viewOut)
-	}
-}
-
-func TestTUIAppUpdateModalFailureGuidance(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	m := newModel("")
-	m.width = 100
-	m.height = 30
-	m.updatePlan = &selfupdate.UpdatePlan{
-		Current:    "v1.0.0",
-		Latest:     "v1.1.0",
-		Status:     selfupdate.StatusAvailable,
-		Channel:    "manual",
-		CanExecute: true,
-	}
-
-	// 1. Simulate update start
-	modelTmp, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("U")})
-	m = modelTmp.(appModel)
-
-	// Simulate enter to start, then failure
-	modelTmp, _ = m.Update(appUpdateResultMsg{err: fmt.Errorf("network disconnect")})
-	m = modelTmp.(appModel)
-
-	if !m.appUpdateModal {
-		t.Fatal("expected modal to remain open on failure")
-	}
-	if m.updateError == nil || m.updateError.Error() != "network disconnect" {
-		t.Errorf("expected updateError to be set to 'network disconnect', got: %v", m.updateError)
-	}
-
-	viewOut := m.View()
-	if !strings.Contains(viewOut, "Update failed") {
-		t.Errorf("expected Update failed heading, got: %s", viewOut)
-	}
-	if !strings.Contains(viewOut, "network disconnect") {
-		t.Errorf("expected error message in view, got: %s", viewOut)
-	}
-
-	// Since we are running the test on the current runtime.GOOS, we check the expected recovery command.
-	_, expectedCmd := selfupdate.RecoveryAdvice("manual", runtime.GOOS)
-	if !strings.Contains(viewOut, expectedCmd) {
-		t.Errorf("expected recovery command %q in view, got: %s", expectedCmd, viewOut)
-	}
-
-	// 2. Test with a different channel: package manager "brew"
-	m.updateError = nil
-	m.updatePlan.Channel = "brew"
-	modelTmp, _ = m.Update(appUpdateResultMsg{err: fmt.Errorf("brew failure")})
-	m = modelTmp.(appModel)
-
-	viewOutBrew := m.View()
-	_, expectedBrewCmd := selfupdate.RecoveryAdvice("brew", runtime.GOOS)
-	if !strings.Contains(viewOutBrew, expectedBrewCmd) {
-		t.Errorf("expected brew recovery command %q in view, got: %s", expectedBrewCmd, viewOutBrew)
 	}
 }

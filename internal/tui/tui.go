@@ -105,9 +105,6 @@ type appModel struct {
 	updatePlan                 *selfupdate.UpdatePlan
 	updatePlanErr              error
 	appUpdateModal             bool
-	updatingApp                bool
-	updateSuccess              bool
-	updateError                error
 }
 
 type paneLayout struct {
@@ -187,10 +184,6 @@ type actionResultMsg struct {
 type updatePlanMsg struct {
 	plan *selfupdate.UpdatePlan
 	err  error
-}
-
-type appUpdateResultMsg struct {
-	err error
 }
 
 func Run(cwd string) error {

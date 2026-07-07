@@ -48,9 +48,13 @@ func run(args []string) error {
 		fs.SetOutput(os.Stderr)
 		checkOnly := fs.Bool("check", false, "only check if update is available")
 		printCmd := fs.Bool("print-command", false, "print upgrade command and exit")
-		yes := fs.Bool("yes", false, "apply update automatically without confirmation")
+		yes := fs.Bool("yes", false, "unsupported; automatic updates have been removed")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+
+		if *yes {
+			return fmt.Errorf("automatic updates have been removed; run lazyskills update for manual upgrade instructions")
 		}
 
 		ctx := context.Background()
@@ -103,29 +107,17 @@ func run(args []string) error {
 		}
 
 		if plan.Status == selfupdate.StatusAvailable {
-			if *yes {
-				if plan.CanExecute {
-					fmt.Fprintf(os.Stdout, "Updating lazyskills to %s...\n", plan.Latest)
-					if err := selfupdate.Apply(ctx, plan, nil); err != nil {
-						return fmt.Errorf("update failed: %w", err)
-					}
-					fmt.Fprintln(os.Stdout, "Update applied successfully. Please restart lazyskills.")
-					return nil
-				} else {
-					fmt.Fprintf(os.Stdout, "Auto-update not supported for install channel: %s\n%s\n", plan.Channel, plan.Reason)
-					if plan.CommandPreview != "" {
-						fmt.Fprintf(os.Stdout, "Command: %s\n", plan.CommandPreview)
-					}
-					return nil
-				}
-			} else {
-				fmt.Fprintf(os.Stdout, "Update available: %s (current: %s)\n", plan.Latest, plan.Current)
+			fmt.Fprintf(os.Stdout, "Update available: %s (current: %s)\n", plan.Latest, plan.Current)
+			if plan.Reason != "" {
 				fmt.Fprintf(os.Stdout, "%s\n", plan.Reason)
-				if plan.CommandPreview != "" {
-					fmt.Fprintf(os.Stdout, "Command: %s\n", plan.CommandPreview)
-				}
-				return nil
 			}
+			if plan.CommandPreview != "" {
+				fmt.Fprintf(os.Stdout, "Command: %s\n", plan.CommandPreview)
+			}
+			if plan.ReleaseURL != "" {
+				fmt.Fprintf(os.Stdout, "Release URL: %s\n", plan.ReleaseURL)
+			}
+			return nil
 		}
 
 		fmt.Fprintln(os.Stdout, "Already up to date.")
@@ -146,7 +138,7 @@ func run(args []string) error {
 			return err
 		}
 		if fs.NArg() > 0 {
-			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills scan --json [--cwd <path>] | lazyskills update [--check] [--print-command] [--yes] | lazyskills version")
+			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills scan --json [--cwd <path>] | lazyskills update [--check] [--print-command] | lazyskills version")
 		}
 		if *cwd == "" {
 			var err error
