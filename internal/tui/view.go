@@ -1814,13 +1814,13 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				_, isSel = m.registrySelectedKeys[s.Source+"\x00"+s.Slug]
 			}
 
-			prefix := "  "
+			prefix := "   "
 			if idx == m.registrySelected && isSel {
 				prefix = "›● "
 			} else if idx == m.registrySelected {
-				prefix = "› "
+				prefix = "›· "
 			} else if isSel {
-				prefix = "● "
+				prefix = " ● "
 			}
 			prefixWidth := lipgloss.Width(prefix)
 
@@ -1922,19 +1922,9 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		}
 
 		rightContentLines = append(rightContentLines,
-			titleStyle.Render(s.DisplayName),
+			titleStyle.Render("Preview/Details: "+s.DisplayName),
 			"",
 		)
-
-		repo, folder := parseSourceURLDetails(s.Source)
-		rightContentLines = append(rightContentLines,
-			formatMetaLine("Slug:", s.Slug, rightWidth),
-			formatMetaLine("Repository:", repo, rightWidth),
-		)
-		if folder != "" {
-			rightContentLines = append(rightContentLines, formatMetaLine("Folder:", folder, rightWidth))
-		}
-		rightContentLines = append(rightContentLines, formatMetaLine("Installs:", fmt.Sprintf("%d", s.Installs), rightWidth))
 
 		var statusVal string
 		allowInstall := true
@@ -1954,7 +1944,18 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			statusVal = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("not installed (installable)")
 		}
 
+		repo, folder := parseSourceURLDetails(s.Source)
+		rightContentLines = append(rightContentLines,
+			formatMetaLine("Name:", s.DisplayName, rightWidth),
+			formatMetaLine("Slug:", s.Slug, rightWidth),
+			formatMetaLine("Source:", repo, rightWidth),
+		)
+		if folder != "" {
+			rightContentLines = append(rightContentLines, formatMetaLine("Path:", folder, rightWidth))
+		}
+		rightContentLines = append(rightContentLines, formatMetaLine("Installs:", fmt.Sprintf("%d", s.Installs), rightWidth))
 		rightContentLines = append(rightContentLines, formatMetaLine("Status:", statusVal, rightWidth))
+
 		if status == StatusSimilarInstalled && similarMsg != "" {
 			rightContentLines = append(rightContentLines, "", errorStyle.Render(wrapText("Notice: A similar skill named '"+similarMsg+"' is already installed.", rightWidth)))
 		}
@@ -1991,8 +1992,16 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			)
 		}
 
-		rightContentLines = append(rightContentLines, "")
-		rightContentLines = append(rightContentLines, sectionHeaderStyle.Render("Install Commands:"), "")
+		if matchedDesc == "" && matchedPreview == "" {
+			rightContentLines = append(rightContentLines,
+				"",
+				sectionHeaderStyle.Render("Preview:"),
+				dimStyle.Render("No preview available"),
+			)
+		}
+
+		var localCmd string
+		var globalCmd string
 
 		if selectedCount > 0 {
 			var list []actions.AvailableSkillInstall
@@ -2007,20 +2016,14 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			globalPreview := actions.ForAvailableSkills(list, true)
 
 			if projPreview.Available {
-				rightContentLines = append(rightContentLines,
-					dimStyle.Render("Bulk Project-local:"),
-					"  "+projPreview.Command,
-				)
+				localCmd = projPreview.Command
 			} else {
-				rightContentLines = append(rightContentLines, errorStyle.Render("Bulk Project-local: "+projPreview.Reason))
+				localCmd = "disabled: " + projPreview.Reason
 			}
 			if globalPreview.Available {
-				rightContentLines = append(rightContentLines,
-					dimStyle.Render("Bulk Globally:"),
-					"  "+globalPreview.Command,
-				)
+				globalCmd = globalPreview.Command
 			} else {
-				rightContentLines = append(rightContentLines, errorStyle.Render("Bulk Globally: "+globalPreview.Reason))
+				globalCmd = "disabled: " + globalPreview.Reason
 			}
 		} else {
 			projActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
@@ -2035,27 +2038,46 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			})
 
 			if len(projActions) == 0 {
-				allowInstall = false
-				cantInstallReason = "installation configuration failed"
+				localCmd = "disabled"
 			} else if !projActions[0].Available {
-				allowInstall = false
-				cantInstallReason = projActions[0].Reason
+				localCmd = "disabled: " + projActions[0].Reason
+			} else {
+				localCmd = projActions[0].Command
 			}
 
-			if !allowInstall && cantInstallReason != "" {
-				rightContentLines = append(rightContentLines, errorStyle.Render(wrapText("Installations disabled: "+cantInstallReason, rightWidth)))
+			if len(globalActions) == 0 {
+				globalCmd = "disabled"
+			} else if !globalActions[0].Available {
+				globalCmd = "disabled: " + globalActions[0].Reason
 			} else {
-				if len(projActions) > 0 && projActions[0].Available {
-					rightContentLines = append(rightContentLines,
-						dimStyle.Render("Project-local:"),
-						"  "+projActions[0].Command,
-					)
+				globalCmd = globalActions[0].Command
+			}
+		}
+
+		if !allowInstall && cantInstallReason != "" {
+			rightContentLines = append(rightContentLines,
+				"",
+				errorStyle.Render(wrapText("Installations disabled: "+cantInstallReason, rightWidth)),
+			)
+		} else {
+			rightContentLines = append(rightContentLines,
+				"",
+				sectionHeaderStyle.Render("Install:"),
+			)
+			localLines := strings.Split(wrapText(localCmd, max(1, rightWidth-10)), "\n")
+			for i, l := range localLines {
+				if i == 0 {
+					rightContentLines = append(rightContentLines, "  Local:  "+l)
+				} else {
+					rightContentLines = append(rightContentLines, "          "+l)
 				}
-				if len(globalActions) > 0 && globalActions[0].Available {
-					rightContentLines = append(rightContentLines,
-						dimStyle.Render("Globally (adds -g):"),
-						"  "+globalActions[0].Command,
-					)
+			}
+			globalLines := strings.Split(wrapText(globalCmd, max(1, rightWidth-10)), "\n")
+			for i, l := range globalLines {
+				if i == 0 {
+					rightContentLines = append(rightContentLines, "  Global: "+l)
+				} else {
+					rightContentLines = append(rightContentLines, "          "+l)
 				}
 			}
 		}
@@ -2107,23 +2129,22 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 func (m appModel) registryModalHelpLine() string {
 	if !m.registryFocusList {
 		if m.registryError != nil && len(m.registryQuery) >= 2 {
-			return "type to search (typing active) · enter retry · tab navigate list · esc close"
+			return "type to search · enter retry · tab list · esc close"
 		}
-		return "type to search (typing active) · tab navigate list · esc close"
+		return "type to search · tab list · esc close"
 	}
-	parts := []string{"↑/↓/j/k choose (navigation active)"}
-	parts = append(parts, "space toggle")
+	parts := []string{"j/k move", "space select"}
 	selectedCount := m.registrySelectedCount()
 	if selectedCount > 0 {
-		parts = append(parts, fmt.Sprintf("enter install (%d)", selectedCount), fmt.Sprintf("g install globally (%d)", selectedCount))
+		parts = append(parts, fmt.Sprintf("enter/g install (%d)", selectedCount))
 	} else {
 		if m.selectedRegistryResultInstallable() {
-			parts = append(parts, "enter install to project", "g install globally")
+			parts = append(parts, "enter/g install")
 		} else {
 			parts = append(parts, "install unavailable")
 		}
 	}
-	parts = append(parts, "tab type search", "esc close")
+	parts = append(parts, "tab back", "esc close")
 	return strings.Join(parts, " · ")
 }
 

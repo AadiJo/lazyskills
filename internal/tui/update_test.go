@@ -676,16 +676,16 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 	if !strings.Contains(viewStr1, "My Display Name") || !strings.Contains(viewStr1, "my-org/my-repo") {
 		t.Fatal("expected view to contain display name and source context")
 	}
-	// Prefix for highlighted-only row starts with "› "
-	if !strings.Contains(viewStr1, "› My Display Name") {
-		t.Errorf("expected prefix '› ' for highlighted row, got view:\n%s", viewStr1)
+	// Prefix for highlighted-only row starts with "›· "
+	if !strings.Contains(viewStr1, "›· My Display Name") {
+		t.Errorf("expected prefix '›· ' for highlighted row, got view:\n%s", viewStr1)
 	}
 	// Verify parsed Repository/Folder and matched Description in Right Pane
-	if !strings.Contains(viewStr1, "Repository:  my-org/my-repo") {
-		t.Errorf("expected parsed Repository to be displayed, got view:\n%s", viewStr1)
+	if !strings.Contains(viewStr1, "Source:      my-org/my-repo") {
+		t.Errorf("expected parsed Source to be displayed, got view:\n%s", viewStr1)
 	}
-	if !strings.Contains(viewStr1, "Folder:      skills/my-folder") {
-		t.Errorf("expected parsed Folder to be displayed, got view:\n%s", viewStr1)
+	if !strings.Contains(viewStr1, "Path:        skills/my-folder") {
+		t.Errorf("expected parsed Path to be displayed, got view:\n%s", viewStr1)
 	}
 	if !strings.Contains(viewStr1, "This is a great skill description!") {
 		t.Errorf("expected matched Description to be displayed, got view:\n%s", viewStr1)
