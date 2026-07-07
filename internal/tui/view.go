@@ -1814,13 +1814,13 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				_, isSel = m.registrySelectedKeys[s.Source+"\x00"+s.Slug]
 			}
 
-			prefix := "   "
+			prefix := " "
 			if idx == m.registrySelected && isSel {
-				prefix = "›● "
+				prefix = ">*"
 			} else if idx == m.registrySelected {
-				prefix = "›· "
+				prefix = ">"
 			} else if isSel {
-				prefix = " ● "
+				prefix = " *"
 			}
 			prefixWidth := lipgloss.Width(prefix)
 
@@ -1927,17 +1927,11 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		)
 
 		var statusVal string
-		allowInstall := true
-		cantInstallReason := ""
 
 		if status == StatusInstalled {
 			statusVal = scopeProjectStyle.Render("[installed] Already installed")
-			allowInstall = false
-			cantInstallReason = "Already installed in project or global catalog."
 		} else if s.Invalid {
 			statusVal = errorStyle.Render("unavailable")
-			allowInstall = false
-			cantInstallReason = compat.FirstNonEmpty(s.Reason, "registry result cannot be safely installed")
 		} else if status == StatusSimilarInstalled {
 			statusVal = warningStyle.Render("[similar] Similar name installed")
 		} else {
@@ -1977,6 +1971,15 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			}
 		}
 
+		key := s.Source + "\x00" + s.Slug
+		var fetchedPreview string
+		if m.registryPreviews != nil {
+			fetchedPreview = m.registryPreviews[key]
+		}
+		if matchedPreview == "" && fetchedPreview != "" {
+			matchedPreview = fetchedPreview
+		}
+
 		if matchedDesc != "" {
 			rightContentLines = append(rightContentLines,
 				"",
@@ -1993,93 +1996,16 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		}
 
 		if matchedDesc == "" && matchedPreview == "" {
+			// Surface metadata as description context so we don't just say No preview available
+			derivedDesc := fmt.Sprintf("A lazyskills skill named '%s' (slug: '%s'), available from source '%s'.", s.DisplayName, s.Slug, repo)
+			if folder != "" {
+				derivedDesc += fmt.Sprintf(" Located under subfolder path '%s'.", folder)
+			}
 			rightContentLines = append(rightContentLines,
 				"",
-				sectionHeaderStyle.Render("Preview:"),
-				dimStyle.Render("No preview available"),
+				sectionHeaderStyle.Render("Preview Context:"),
+				wrapText(derivedDesc, rightWidth),
 			)
-		}
-
-		var localCmd string
-		var globalCmd string
-
-		if selectedCount > 0 {
-			var list []actions.AvailableSkillInstall
-			for _, sel := range m.registrySelectedKeys {
-				list = append(list, actions.AvailableSkillInstall{
-					Source:      sel.Source,
-					DisplayName: sel.DisplayName,
-					Slug:        sel.Slug,
-				})
-			}
-			projPreview := actions.ForAvailableSkills(list, false)
-			globalPreview := actions.ForAvailableSkills(list, true)
-
-			if projPreview.Available {
-				localCmd = projPreview.Command
-			} else {
-				localCmd = "disabled: " + projPreview.Reason
-			}
-			if globalPreview.Available {
-				globalCmd = globalPreview.Command
-			} else {
-				globalCmd = "disabled: " + globalPreview.Reason
-			}
-		} else {
-			projActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
-				DisplayName: s.DisplayName,
-				Slug:        s.Slug,
-				Global:      false,
-			})
-			globalActions := actions.ForAvailableSkillWithOptions(s.Source, actions.InstallOptions{
-				DisplayName: s.DisplayName,
-				Slug:        s.Slug,
-				Global:      true,
-			})
-
-			if len(projActions) == 0 {
-				localCmd = "disabled"
-			} else if !projActions[0].Available {
-				localCmd = "disabled: " + projActions[0].Reason
-			} else {
-				localCmd = projActions[0].Command
-			}
-
-			if len(globalActions) == 0 {
-				globalCmd = "disabled"
-			} else if !globalActions[0].Available {
-				globalCmd = "disabled: " + globalActions[0].Reason
-			} else {
-				globalCmd = globalActions[0].Command
-			}
-		}
-
-		if !allowInstall && cantInstallReason != "" {
-			rightContentLines = append(rightContentLines,
-				"",
-				errorStyle.Render(wrapText("Installations disabled: "+cantInstallReason, rightWidth)),
-			)
-		} else {
-			rightContentLines = append(rightContentLines,
-				"",
-				sectionHeaderStyle.Render("Install:"),
-			)
-			localLines := strings.Split(wrapText(localCmd, max(1, rightWidth-10)), "\n")
-			for i, l := range localLines {
-				if i == 0 {
-					rightContentLines = append(rightContentLines, "  Local:  "+l)
-				} else {
-					rightContentLines = append(rightContentLines, "          "+l)
-				}
-			}
-			globalLines := strings.Split(wrapText(globalCmd, max(1, rightWidth-10)), "\n")
-			for i, l := range globalLines {
-				if i == 0 {
-					rightContentLines = append(rightContentLines, "  Global: "+l)
-				} else {
-					rightContentLines = append(rightContentLines, "          "+l)
-				}
-			}
 		}
 	} else {
 		rightContentLines = append(rightContentLines, dimStyle.Render("Select a registry search result to view details."))

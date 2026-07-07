@@ -118,6 +118,7 @@ type appModel struct {
 	registryGeneration         int
 	registryFocusList          bool
 	registrySelectedKeys       map[string]registry.Skill
+	registryPreviews           map[string]string
 	confirmReturnRegistry      bool
 }
 
@@ -231,6 +232,7 @@ func newModel(cwd string) appModel {
 		collapsedGroups:  make(map[string]bool),
 		discovery:        make(map[string]SourceDiscovery),
 		previewCache:     make(map[previewCacheKey][]string),
+		registryPreviews: make(map[string]string),
 	}
 }
 

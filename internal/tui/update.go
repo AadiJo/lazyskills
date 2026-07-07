@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +183,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.registryError = msg.err
 			m.registrySelected = 0
 			m.syncViewport()
+			return m, m.currentRegistryPreviewCmd()
 		}
+	case registryPreviewMsg:
+		if m.registryPreviews == nil {
+			m.registryPreviews = make(map[string]string)
+		}
+		m.registryPreviews[msg.key] = msg.content
+		m.syncViewport()
+		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
 		var postKeyCmd tea.Cmd
@@ -226,6 +236,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.registrySelected = len(m.registryResults) - 1
 						}
 						m.syncViewport()
+						return m, m.currentRegistryPreviewCmd()
 					}
 					return m, nil
 				case "down", "j":
@@ -235,6 +246,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.registrySelected = 0
 						}
 						m.syncViewport()
+						return m, m.currentRegistryPreviewCmd()
 					}
 					return m, nil
 				case " ":
@@ -1919,4 +1931,93 @@ func scheduleRegistrySearch(query string, generation int) tea.Cmd {
 	return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
 		return registryDebounceMsg{generation: generation, query: query}
 	})
+}
+
+type registryPreviewMsg struct {
+	key     string
+	content string
+}
+
+func deriveRawGitHubURLs(source string) []string {
+	repo, folder := parseSourceURLDetails(source)
+	parts := strings.Split(repo, "/")
+	if len(parts) < 2 {
+		return nil
+	}
+	owner, name := parts[0], parts[1]
+
+	var urls []string
+	branches := []string{"main", "master"}
+	files := []string{"SKILL.md", "README.md", "README"}
+
+	for _, branch := range branches {
+		for _, file := range files {
+			var path string
+			if folder != "" {
+				path = folder + "/" + file
+			} else {
+				path = file
+			}
+			urls = append(urls, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, name, branch, path))
+		}
+	}
+	return urls
+}
+
+func (m appModel) fetchRegistryPreviewCmd(key string, source string) tea.Cmd {
+	return func() tea.Msg {
+		urls := deriveRawGitHubURLs(source)
+		if len(urls) == 0 {
+			return registryPreviewMsg{key: key, content: ""}
+		}
+
+		client := &http.Client{Timeout: 3 * time.Second}
+		for _, u := range urls {
+			req, err := http.NewRequest("GET", u, nil)
+			if err != nil {
+				continue
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			if resp.StatusCode == http.StatusOK {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err == nil && len(bodyBytes) > 0 {
+					return registryPreviewMsg{
+						key:     key,
+						content: string(bodyBytes),
+					}
+				}
+			}
+			resp.Body.Close()
+		}
+		return registryPreviewMsg{key: key, content: ""}
+	}
+}
+
+func (m appModel) currentRegistryPreviewCmd() tea.Cmd {
+	if len(m.registryResults) == 0 || m.registrySelected < 0 || m.registrySelected >= len(m.registryResults) {
+		return nil
+	}
+	s := m.registryResults[m.registrySelected]
+	key := s.Source + "\x00" + s.Slug
+	if m.registryPreviews != nil {
+		if _, exists := m.registryPreviews[key]; exists {
+			return nil
+		}
+	}
+	for _, disc := range m.discovery {
+		if disc.Status == DiscoveryReady {
+			for _, ds := range disc.Skills {
+				if compat.NormalizeName(ds.Name) == compat.NormalizeName(s.DisplayName) || compat.NormalizeName(ds.Name) == compat.NormalizeName(s.Slug) {
+					if ds.Preview != "" || ds.Description != "" {
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return m.fetchRegistryPreviewCmd(key, s.Source)
 }

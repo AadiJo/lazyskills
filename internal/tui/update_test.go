@@ -676,9 +676,9 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 	if !strings.Contains(viewStr1, "My Display Name") || !strings.Contains(viewStr1, "my-org/my-repo") {
 		t.Fatal("expected view to contain display name and source context")
 	}
-	// Prefix for highlighted-only row starts with "›· "
-	if !strings.Contains(viewStr1, "›· My Display Name") {
-		t.Errorf("expected prefix '›· ' for highlighted row, got view:\n%s", viewStr1)
+	// Prefix for highlighted-only row starts with ">"
+	if !strings.Contains(viewStr1, ">My Display Name") {
+		t.Errorf("expected prefix '>' for highlighted row, got view:\n%s", viewStr1)
 	}
 	// Verify parsed Repository/Folder and matched Description in Right Pane
 	if !strings.Contains(viewStr1, "Source:      my-org/my-repo") {
@@ -772,5 +772,39 @@ func TestTUIRegistryModeKeySeparation(t *testing.T) {
 	m = modelTmp.(appModel)
 	if m.registryQuery != "abjk" {
 		t.Errorf("expected query to remain unchanged on list-focused alpha input, got query=%q", m.registryQuery)
+	}
+}
+
+func TestTUIRegistryPreviewAndNoInstallCommands(t *testing.T) {
+	m := newModel("")
+	m.width = 120
+	m.height = 30
+	m.registryModal = true
+	m.registryQuery = "xyz"
+	m.registryResults = []registry.Skill{
+		{DisplayName: "Test Skill", Slug: "test-skill", Source: "https://github.com/my-org/my-repo/skills/test-folder"},
+	}
+	m.registrySelected = 0
+
+	// 1. Without preview fetched, it should show the derived preview context
+	viewStr1 := m.View()
+	if strings.Contains(viewStr1, "No preview available") {
+		t.Error("expected derived preview context, but found 'No preview available'")
+	}
+	if !strings.Contains(viewStr1, "A lazyskills skill named 'Test Skill'") {
+		t.Error("expected derived preview description to be shown")
+	}
+
+	// 2. Install Commands section must not be present in the right pane
+	if strings.Contains(viewStr1, "Install Commands:") || strings.Contains(viewStr1, "Install:") || strings.Contains(viewStr1, "Local:") {
+		t.Error("Install section must be completely removed from the right pane")
+	}
+
+	// 3. With HTTP raw preview fetched and cached
+	key := "https://github.com/my-org/my-repo/skills/test-folder" + "\x00" + "test-skill"
+	m.registryPreviews[key] = "This is a fetched SKILL.md markdown preview!"
+	viewStr2 := m.View()
+	if !strings.Contains(viewStr2, "This is a fetched SKILL.md markdown preview!") {
+		t.Error("expected the fetched HTTP preview to be displayed")
 	}
 }
