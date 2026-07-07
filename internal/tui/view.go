@@ -1723,10 +1723,14 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 	if !m.registryFocusList {
 		focusPrompt = "Search › "
 	}
+	cursor := ""
+	if !m.registryFocusList {
+		cursor = "_"
+	}
 	if m.registryQuery == "" {
-		inputLine = focusPrompt + dimStyle.Render("Type to search...")
+		inputLine = focusPrompt + dimStyle.Render("Type to search...") + cursor
 	} else {
-		inputLine = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(focusPrompt) + m.registryQuery + "_"
+		inputLine = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(focusPrompt) + m.registryQuery + cursor
 	}
 
 	var leftContentLines []string
@@ -1926,7 +1930,7 @@ func (m appModel) registryModalHelpLine() string {
 		}
 		return "type search · tab select list · esc close"
 	}
-	parts := []string{"type search", "↑/↓ choose"}
+	parts := []string{"↑/↓ choose"}
 	if m.selectedRegistryResultInstallable() {
 		parts = append(parts, "enter install to project", "g install globally")
 	} else {

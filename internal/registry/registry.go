@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,15 +35,29 @@ type Client struct {
 
 // NewClient returns a registry Client initialized with base URL from environment or fallback, and a default timeout.
 func NewClient() *Client {
+	c := &Client{}
+	c.BaseURL = c.baseURL()
+	c.HTTPClient = c.httpClient()
+	return c
+}
+
+func (c *Client) baseURL() string {
+	if c.BaseURL != "" {
+		return c.BaseURL
+	}
 	baseURL := os.Getenv("SKILLS_API_URL")
 	if baseURL == "" {
 		baseURL = "https://skills.sh"
 	}
-	return &Client{
-		BaseURL: baseURL,
-		HTTPClient: &http.Client{
-			Timeout: 9 * time.Second,
-		},
+	return baseURL
+}
+
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return &http.Client{
+		Timeout: 9 * time.Second,
 	}
 }
 
@@ -62,29 +77,16 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]Skill, 
 		return nil, nil
 	}
 
-	baseURL := c.BaseURL
-	if baseURL == "" {
-		baseURL = os.Getenv("SKILLS_API_URL")
-		if baseURL == "" {
-			baseURL = "https://skills.sh"
-		}
-	}
-
-	httpClient := c.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: 9 * time.Second,
-		}
-	}
+	baseURL := c.baseURL()
+	httpClient := c.httpClient()
 
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL %q: %w", baseURL, err)
 	}
 
-	u := parsedURL.ResolveReference(&url.URL{
-		Path: "/api/search",
-	})
+	u := *parsedURL
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/search"
 	q := url.Values{}
 	q.Set("q", query)
 	if limit > 0 {
@@ -107,8 +109,9 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]Skill, 
 		return nil, fmt.Errorf("unexpected registry response status: %d", resp.StatusCode)
 	}
 
+	limitedBody := io.LimitReader(resp.Body, 2*1024*1024)
 	var res apiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(limitedBody).Decode(&res); err != nil {
 		return nil, fmt.Errorf("failed to parse registry json response: %w", err)
 	}
 

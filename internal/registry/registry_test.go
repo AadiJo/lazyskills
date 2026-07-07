@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -216,5 +217,51 @@ func TestSearchSanitization(t *testing.T) {
 	}
 	if !s.Invalid || s.Reason == "" {
 		t.Errorf("expected unsafe command fields to mark result invalid, got %+v", s)
+	}
+}
+
+func TestResolveReferencePreservesBasePath(t *testing.T) {
+	calledPath := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calledPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"skills": []}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL: server.URL + "/v2",
+	}
+	_, err := client.Search(context.Background(), "query", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedPath := "/v2/api/search"
+	if calledPath != expectedPath {
+		t.Errorf("expected called path to be %q, got %q", expectedPath, calledPath)
+	}
+}
+
+func TestSearchResponseBodyLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"skills": [`))
+		largeVal := strings.Repeat(`{"id": "owner/repo/friendly-skill", "name": "friendly-skill", "installs": 10, "source": "owner/repo"},`, 25000)
+		_, _ = w.Write([]byte(largeVal))
+		_, _ = w.Write([]byte(`]}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL: server.URL,
+	}
+
+	_, err := client.Search(context.Background(), "query", 5)
+	if err == nil {
+		t.Fatal("expected error due to response body size limit, but got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse registry json response") {
+		t.Errorf("expected error message to contain 'failed to parse registry json response', got %q", err.Error())
 	}
 }
