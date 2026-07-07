@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,8 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
 	"github.com/charmbracelet/lipgloss"
 )
+
+var htmlTagRE = regexp.MustCompile(`<[^>]+>`)
 
 func (m appModel) View() string {
 	viewStart := time.Now()
@@ -770,6 +774,35 @@ func renderMarkdownPreview(markdown string, width int) []string {
 		lines = append(lines, wrapText(line, width))
 	}
 	return lines
+}
+
+func sanitizeRegistryPreviewContent(markdown string) string {
+	markdown = compat.SanitizePreviewContent(markdown)
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
+	markdown = strings.ReplaceAll(markdown, "\r", "\n")
+	for _, tag := range []string{"br", "p", "div", "li", "h1", "h2", "h3", "h4"} {
+		markdown = regexp.MustCompile(`(?i)</?`+tag+`\b[^>]*>`).ReplaceAllString(markdown, "\n")
+	}
+	markdown = htmlTagRE.ReplaceAllString(markdown, "")
+	markdown = html.UnescapeString(markdown)
+	lines := strings.Split(markdown, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func appendRegistryPreviewLines(lines []string, title string, markdown string, width int, maxLines int) []string {
+	markdown = sanitizeRegistryPreviewContent(markdown)
+	if markdown == "" {
+		return lines
+	}
+	rendered := renderMarkdownPreview(markdown, width)
+	if len(rendered) > maxLines {
+		rendered = append(rendered[:maxLines], dimStyle.Render("…"))
+	}
+	lines = append(lines, "", sectionHeaderStyle.Render(title))
+	return append(lines, rendered...)
 }
 
 func stripMarkdownFrontmatter(markdown string) string {
@@ -1808,20 +1841,27 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		leftContentLines = append(leftContentLines, "  No skills found in registry.")
 	} else {
 		// Show results
+		rowIndent := "  "
+		rowWidth := leftWidth - lipgloss.Width(rowIndent)
+		if rowWidth < 10 {
+			rowWidth = leftWidth
+			rowIndent = ""
+		}
 		for idx, s := range m.registryResults {
 			isSel := false
 			if m.registrySelectedKeys != nil {
 				_, isSel = m.registrySelectedKeys[s.Source+"\x00"+s.Slug]
 			}
 
-			prefix := " "
-			if idx == m.registrySelected && isSel {
-				prefix = ">*"
-			} else if idx == m.registrySelected {
-				prefix = ">"
-			} else if isSel {
-				prefix = " *"
+			focusMarker := " "
+			if idx == m.registrySelected {
+				focusMarker = ">"
 			}
+			selectMarker := " "
+			if isSel {
+				selectMarker = "*"
+			}
+			prefix := focusMarker + selectMarker
 			prefixWidth := lipgloss.Width(prefix)
 
 			status, _ := m.checkRegistrySkillStatus(s)
@@ -1844,7 +1884,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				rightPart = installsStyled
 			}
 			rightPartWidth := lipgloss.Width(rightPart)
-			availNameWidth := leftWidth - prefixWidth - rightPartWidth - 1 // 1 space padding
+			availNameWidth := rowWidth - prefixWidth - rightPartWidth - 1 // 1 space padding
 			if availNameWidth < 5 {
 				availNameWidth = 5
 			}
@@ -1884,8 +1924,8 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 
 			// Pad the line
 			linePlain := prefix + truncatedPlain
-			paddingLen := leftWidth - lipgloss.Width(linePlain) - rightPartWidth
-			line := prefix + styledText
+			paddingLen := rowWidth - lipgloss.Width(linePlain) - rightPartWidth
+			line := rowIndent + prefix + styledText
 			if paddingLen > 0 {
 				line += strings.Repeat(" ", paddingLen)
 			}
@@ -1894,9 +1934,9 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			if idx == m.registrySelected {
 				var lineStyled string
 				if m.registryFocusList {
-					lineStyled = selectedStyle.Render(padRight(prefix+truncatedPlain, leftWidth-rightPartWidth-1) + " " + rightPart)
+					lineStyled = selectedStyle.Render(rowIndent + padRight(prefix+truncatedPlain, rowWidth-rightPartWidth-1) + " " + rightPart)
 				} else {
-					lineStyled = inactiveSelectedStyle.Render(padRight(prefix+truncatedPlain, leftWidth-rightPartWidth-1) + " " + rightPart)
+					lineStyled = inactiveSelectedStyle.Render(rowIndent + padRight(prefix+truncatedPlain, rowWidth-rightPartWidth-1) + " " + rightPart)
 				}
 				leftContentLines = append(leftContentLines, lineStyled)
 			} else {
@@ -1979,33 +2019,35 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		if matchedPreview == "" && fetchedPreview != "" {
 			matchedPreview = fetchedPreview
 		}
+		previewLoading := false
+		if matchedDesc == "" && matchedPreview == "" {
+			if m.registryPreviews == nil {
+				previewLoading = true
+			} else if _, fetched := m.registryPreviews[key]; !fetched {
+				previewLoading = true
+			}
+		}
 
 		if matchedDesc != "" {
-			rightContentLines = append(rightContentLines,
-				"",
-				sectionHeaderStyle.Render("Description:"),
-				wrapText(matchedDesc, rightWidth),
-			)
+			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Description:", matchedDesc, rightWidth, 5)
 		}
 		if matchedPreview != "" {
+			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Preview:", matchedPreview, rightWidth, 12)
+		}
+
+		if previewLoading {
 			rightContentLines = append(rightContentLines,
 				"",
 				sectionHeaderStyle.Render("Preview:"),
-				wrapText(matchedPreview, rightWidth),
+				runningStyle.Render("Loading preview..."),
 			)
-		}
-
-		if matchedDesc == "" && matchedPreview == "" {
+		} else if matchedDesc == "" && matchedPreview == "" {
 			// Surface metadata as description context so we don't just say No preview available
 			derivedDesc := fmt.Sprintf("A lazyskills skill named '%s' (slug: '%s'), available from source '%s'.", s.DisplayName, s.Slug, repo)
 			if folder != "" {
 				derivedDesc += fmt.Sprintf(" Located under subfolder path '%s'.", folder)
 			}
-			rightContentLines = append(rightContentLines,
-				"",
-				sectionHeaderStyle.Render("Preview Context:"),
-				wrapText(derivedDesc, rightWidth),
-			)
+			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Preview Context:", derivedDesc, rightWidth, 6)
 		}
 	} else {
 		rightContentLines = append(rightContentLines, dimStyle.Render("Select a registry search result to view details."))

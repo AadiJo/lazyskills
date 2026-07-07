@@ -230,6 +230,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.syncViewport()
 					return m, nil
 				case "up", "k":
+					if m.registryLoading {
+						return m, nil
+					}
 					if len(m.registryResults) > 0 {
 						m.registrySelected--
 						if m.registrySelected < 0 {
@@ -240,6 +243,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				case "down", "j":
+					if m.registryLoading {
+						return m, nil
+					}
 					if len(m.registryResults) > 0 {
 						m.registrySelected++
 						if m.registrySelected >= len(m.registryResults) {
@@ -250,6 +256,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				case " ":
+					if m.registryLoading {
+						return m, nil
+					}
 					if len(m.registryResults) > 0 {
 						s := m.registryResults[m.registrySelected]
 						status, _ := m.checkRegistrySkillStatus(s)
@@ -268,6 +277,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				case "enter":
+					if m.registryLoading {
+						return m, nil
+					}
 					// List is focused: start project install confirmation
 					selectedCount := len(m.registrySelectedKeys)
 					if selectedCount > 0 {
@@ -320,6 +332,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				case "g":
+					if m.registryLoading {
+						return m, nil
+					}
 					// list focused: start global install confirmation
 					selectedCount := len(m.registrySelectedKeys)
 					if selectedCount > 0 {
@@ -1982,12 +1997,12 @@ func (m appModel) fetchRegistryPreviewCmd(key string, source string) tea.Cmd {
 				continue
 			}
 			if resp.StatusCode == http.StatusOK {
-				bodyBytes, err := io.ReadAll(resp.Body)
+				bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 				resp.Body.Close()
 				if err == nil && len(bodyBytes) > 0 {
 					return registryPreviewMsg{
 						key:     key,
-						content: string(bodyBytes),
+						content: compat.SanitizePreviewContent(string(bodyBytes)),
 					}
 				}
 			}

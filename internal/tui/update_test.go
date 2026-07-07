@@ -676,10 +676,18 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 	if !strings.Contains(viewStr1, "My Display Name") || !strings.Contains(viewStr1, "my-org/my-repo") {
 		t.Fatal("expected view to contain display name and source context")
 	}
-	// Prefix for highlighted-only row starts with ">"
-	if !strings.Contains(viewStr1, ">My Display Name") {
-		t.Errorf("expected prefix '>' for highlighted row, got view:\n%s", viewStr1)
+	// Prefix reserves one marker cell for selection: focused/unselected is "> Name".
+	if !strings.Contains(viewStr1, "> My Display Name") {
+		t.Errorf("expected prefix '> ' for highlighted unselected row, got view:\n%s", viewStr1)
 	}
+	m.registrySelectedKeys = map[string]registry.Skill{
+		"https://github.com/my-org/my-repo/skills/my-folder\x00my-display-name": m.registryResults[0],
+	}
+	viewSelected := m.View()
+	if !strings.Contains(viewSelected, ">*My Display Name") {
+		t.Errorf("expected selected marker to replace reserved blank as '>*', got view:\n%s", viewSelected)
+	}
+	m.registrySelectedKeys = nil
 	// Verify parsed Repository/Folder and matched Description in Right Pane
 	if !strings.Contains(viewStr1, "Source:      my-org/my-repo") {
 		t.Errorf("expected parsed Source to be displayed, got view:\n%s", viewStr1)
@@ -687,7 +695,7 @@ func TestTUIRegistryListRenderingWithContextAndFocus(t *testing.T) {
 	if !strings.Contains(viewStr1, "Path:        skills/my-folder") {
 		t.Errorf("expected parsed Path to be displayed, got view:\n%s", viewStr1)
 	}
-	if !strings.Contains(viewStr1, "This is a great skill description!") {
+	if !strings.Contains(viewStr1, "This is a great skill description") {
 		t.Errorf("expected matched Description to be displayed, got view:\n%s", viewStr1)
 	}
 
@@ -746,6 +754,7 @@ func TestTUIRegistryModeKeySeparation(t *testing.T) {
 
 	// Test 2: List focused
 	m.registryFocusList = true
+	m.registryLoading = false
 
 	// Pressing 'j' should navigate list down
 	modelTmp, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
@@ -786,13 +795,15 @@ func TestTUIRegistryPreviewAndNoInstallCommands(t *testing.T) {
 	}
 	m.registrySelected = 0
 
-	// 1. Without preview fetched, it should show the derived preview context
+	key := "https://github.com/my-org/my-repo/skills/test-folder" + "\x00" + "test-skill"
+
+	// 1. Before async preview fetch returns, show an explicit loading state.
 	viewStr1 := m.View()
 	if strings.Contains(viewStr1, "No preview available") {
-		t.Error("expected derived preview context, but found 'No preview available'")
+		t.Error("must not show 'No preview available'")
 	}
-	if !strings.Contains(viewStr1, "A lazyskills skill named 'Test Skill'") {
-		t.Error("expected derived preview description to be shown")
+	if !strings.Contains(viewStr1, "Loading preview") {
+		t.Error("expected loading preview indicator before async fetch result")
 	}
 
 	// 2. Install Commands section must not be present in the right pane
@@ -800,11 +811,20 @@ func TestTUIRegistryPreviewAndNoInstallCommands(t *testing.T) {
 		t.Error("Install section must be completely removed from the right pane")
 	}
 
-	// 3. With HTTP raw preview fetched and cached
-	key := "https://github.com/my-org/my-repo/skills/test-folder" + "\x00" + "test-skill"
-	m.registryPreviews[key] = "This is a fetched SKILL.md markdown preview!"
+	// 3. Empty fetch result should fall back to useful metadata context.
+	m.registryPreviews[key] = ""
 	viewStr2 := m.View()
-	if !strings.Contains(viewStr2, "This is a fetched SKILL.md markdown preview!") {
+	if !strings.Contains(viewStr2, "A lazyskills skill named") {
+		t.Error("expected derived preview context after empty fetch result")
+	}
+
+	// 4. Fetched preview is rendered as markdown-ish text, with HTML tags stripped.
+	m.registryPreviews[key] = "# Heading\n<p>This is a fetched <strong>SKILL.md</strong> markdown preview!</p>"
+	viewStr3 := m.View()
+	if !strings.Contains(viewStr3, "This is a fetched") {
 		t.Error("expected the fetched HTTP preview to be displayed")
+	}
+	if strings.Contains(viewStr3, "<p>") || strings.Contains(viewStr3, "<strong>") {
+		t.Error("expected HTML tags to be stripped from fetched preview")
 	}
 }
