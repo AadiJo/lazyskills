@@ -2137,7 +2137,10 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Description:", matchedDesc, rightWidth, 5)
 		}
 		if matchedPreview != "" {
-			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Preview:", matchedPreview, rightWidth, 12)
+			// The right pane is already scrollable. Do not pre-truncate the
+			// SKILL.md preview here, otherwise ctrl-u/d can only scroll through
+			// the first few rendered lines while the rest of the pane stays empty.
+			rightContentLines = appendRegistryPreviewLines(rightContentLines, "Preview:", matchedPreview, rightWidth, 0)
 		}
 
 		if previewLoading {

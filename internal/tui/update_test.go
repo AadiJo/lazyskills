@@ -753,6 +753,15 @@ func TestTUIRegistryPreviewScroll(t *testing.T) {
 	if !strings.Contains(viewScrolled, "line 06") && !strings.Contains(viewScrolled, "line 07") {
 		t.Fatalf("expected scrolled preview content, got:\n%s", viewScrolled)
 	}
+
+	for range 20 {
+		modelTmp, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = modelTmp.(appModel)
+	}
+	viewScrolledDeep := m.View()
+	if !strings.Contains(viewScrolledDeep, "line 40") {
+		t.Fatalf("expected full preview to remain available after scrolling, got:\n%s", viewScrolledDeep)
+	}
 }
 
 func TestTUIRegistryResultsScrollWithSelection(t *testing.T) {
