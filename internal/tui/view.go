@@ -799,7 +799,7 @@ func appendRegistryPreviewLines(lines []string, title string, markdown string, w
 	lines = append(lines, "", sectionHeaderStyle.Render(title))
 	if maxLines > 0 {
 		if len(rendered) > maxLines {
-			rendered = append(rendered[:maxLines], dimStyle.Render("…"))
+			rendered = append(rendered[:maxLines:maxLines], dimStyle.Render("…"))
 		}
 	}
 	return append(lines, rendered...)

@@ -821,7 +821,7 @@ func TestTUIANSIClampKeepsStyledLinesValid(t *testing.T) {
 	if strings.ContainsRune(clamped, '\uFFFD') {
 		t.Fatalf("clamped styled line contains replacement characters: %q", clamped)
 	}
-	if strings.Contains(clamped, "\x1b[") && !strings.Contains(clamped, "\x1b[0m") {
+	if strings.Contains(clamped, "\x1b[") && !strings.Contains(clamped, "\x1b[0m") && !strings.Contains(clamped, "\x1b[m") {
 		t.Fatalf("clamped styled line appears to have lost ANSI reset: %q", clamped)
 	}
 }
