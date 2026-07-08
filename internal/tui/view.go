@@ -2,8 +2,7 @@ package tui
 
 import (
 	"fmt"
-	"html"
-	"regexp"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -17,10 +16,8 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
 	"github.com/charmbracelet/lipgloss"
+	xhtml "golang.org/x/net/html"
 )
-
-var htmlBlockTagRE = regexp.MustCompile(`(?i)</?(?:br|p|div|li|h1|h2|h3|h4)\b[^>]*>`)
-var htmlTagRE = regexp.MustCompile(`<[^>]+>`)
 
 func (m appModel) View() string {
 	viewStart := time.Now()
@@ -664,7 +661,6 @@ func (m appModel) previewLinesForRows(rows []skillsRow, width int) []string {
 			}
 		}
 
-		lines = append(lines, "", dimStyle.Render("enter to browse · d to scan"))
 		var wrapped []string
 		for _, line := range lines {
 			wrapped = append(wrapped, wrapText(line, width))
@@ -781,14 +777,81 @@ func sanitizeRegistryPreviewContent(markdown string) string {
 	markdown = compat.SanitizePreviewContent(markdown)
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	markdown = strings.ReplaceAll(markdown, "\r", "\n")
-	markdown = htmlBlockTagRE.ReplaceAllString(markdown, "\n")
-	markdown = htmlTagRE.ReplaceAllString(markdown, "")
-	markdown = html.UnescapeString(markdown)
+	markdown = registryPreviewPlainText(markdown)
 	lines := strings.Split(markdown, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimRight(line, " \t")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func registryPreviewPlainText(markdown string) string {
+	var b strings.Builder
+	z := xhtml.NewTokenizer(strings.NewReader(markdown))
+	skipDepth := 0
+	lastWasNewline := false
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case xhtml.ErrorToken:
+			if z.Err() == io.EOF {
+				return b.String()
+			}
+			return b.String()
+		case xhtml.TextToken:
+			if skipDepth == 0 {
+				text := z.Token().Data
+				b.WriteString(text)
+				lastWasNewline = strings.HasSuffix(text, "\n")
+			}
+		case xhtml.StartTagToken, xhtml.SelfClosingTagToken:
+			tag := z.Token().DataAtom.String()
+			if tag == "" {
+				tag = strings.ToLower(z.Token().Data)
+			}
+			if tag == "script" || tag == "style" {
+				if tt == xhtml.StartTagToken {
+					skipDepth++
+				}
+				continue
+			}
+			if skipDepth == 0 && registryPreviewBlockTag(tag) {
+				writeRegistryPreviewNewline(&b, &lastWasNewline)
+			}
+		case xhtml.EndTagToken:
+			tag := z.Token().DataAtom.String()
+			if tag == "" {
+				tag = strings.ToLower(z.Token().Data)
+			}
+			if tag == "script" || tag == "style" {
+				if skipDepth > 0 {
+					skipDepth--
+				}
+				continue
+			}
+			if skipDepth == 0 && registryPreviewBlockTag(tag) {
+				writeRegistryPreviewNewline(&b, &lastWasNewline)
+			}
+		}
+	}
+}
+
+func writeRegistryPreviewNewline(b *strings.Builder, lastWasNewline *bool) {
+	if *lastWasNewline {
+		return
+	}
+	b.WriteByte('\n')
+	*lastWasNewline = true
+}
+
+func registryPreviewBlockTag(tag string) bool {
+	switch tag {
+	case "br", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6":
+		return true
+	default:
+		return false
+	}
 }
 
 func appendRegistryPreviewLines(lines []string, title string, markdown string, width int, maxLines int) []string {
@@ -798,6 +861,11 @@ func appendRegistryPreviewLines(lines []string, title string, markdown string, w
 	}
 	rendered := renderMarkdownPreview(markdown, width)
 	lines = append(lines, "", sectionHeaderStyle.Render(title))
+	if maxLines > 0 {
+		if len(rendered) > maxLines {
+			rendered = append(rendered[:maxLines:maxLines], dimStyle.Render("…"))
+		}
+	}
 	return append(lines, rendered...)
 }
 
@@ -1777,31 +1845,11 @@ func truncateReleaseNotes(notes string, width int) string {
 }
 
 func parseSourceURLDetails(source string) (repo string, folder string) {
-	src := source
-	src = strings.TrimPrefix(src, "git+https://")
-	src = strings.TrimPrefix(src, "https://")
-	src = strings.TrimPrefix(src, "http://")
-	src = strings.TrimPrefix(src, "git@")
-	src = strings.ReplaceAll(src, ":", "/")
-	src = strings.TrimSuffix(src, ".git")
-	src = strings.TrimRight(src, "/")
-
-	// Remove host prefix
-	for _, host := range []string{"github.com/", "gitlab.com/"} {
-		src = strings.TrimPrefix(src, host)
+	parsed, ok := parseSource(source)
+	if !ok {
+		return legacySourceURLDetails(source)
 	}
-
-	// Now src should look like "owner/repo/sub/folders" or just "owner/repo"
-	parts := strings.Split(src, "/")
-	if len(parts) >= 2 {
-		repo = parts[0] + "/" + parts[1]
-		if len(parts) > 2 {
-			folder = strings.Join(parts[2:], "/")
-		}
-	} else {
-		repo = src
-	}
-	return repo, folder
+	return parsed.repoSlug(), parsed.Folder
 }
 
 func (m appModel) registrySelectedCount() int {
@@ -1827,7 +1875,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		if m.registryQuery == "" {
 			inputLine = promptStyled + dimStyle.Render("Type to search...")
 		} else {
-			inputLine = promptStyled + m.registryQuery
+			inputLine = promptStyled + truncate(m.registryQuery, max(1, leftWidth-lipgloss.Width(focusPrompt)-2))
 		}
 	} else {
 		// Search input is focused: prompt has high contrast
@@ -1835,7 +1883,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		if m.registryQuery == "" {
 			inputLine = promptStyled + dimStyle.Render("Type to search...")
 		} else {
-			inputLine = promptStyled + m.registryQuery + "_"
+			inputLine = promptStyled + truncate(m.registryQuery, max(1, leftWidth-lipgloss.Width(focusPrompt)-3)) + "_"
 		}
 	}
 
@@ -1861,21 +1909,47 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 	} else if len(m.registryResults) == 0 {
 		leftContentLines = append(leftContentLines, "  No skills found in registry.")
 	} else {
-		// Show results
+		// Show results in a real viewport. Registry searches can return many
+		// matches; rendering the full list and clipping it leaves the selected
+		// row off-screen and can make the fixed-height modal redraw incorrectly.
 		rowIndent := "  "
 		rowWidth := leftWidth - lipgloss.Width(rowIndent)
 		if rowWidth < 10 {
 			rowWidth = leftWidth
 			rowIndent = ""
 		}
-		for idx, s := range m.registryResults {
+		resultSlots := innerHeight - len(leftContentLines)
+		if resultSlots < 1 {
+			resultSlots = 1
+		}
+		visibleSlots := resultSlots
+		showScrollIndicator := len(m.registryResults) > resultSlots
+		if showScrollIndicator && visibleSlots > 1 {
+			visibleSlots--
+		}
+
+		start := 0
+		if showScrollIndicator {
+			start = m.registrySelected - visibleSlots + 1
+			if start < 0 {
+				start = 0
+			}
+			maxStart := len(m.registryResults) - visibleSlots
+			if start > maxStart {
+				start = maxStart
+			}
+		}
+		end := min(len(m.registryResults), start+visibleSlots)
+
+		for idx, s := range m.registryResults[start:end] {
+			actualIdx := start + idx
 			isSel := false
 			if m.registrySelectedKeys != nil {
 				_, isSel = m.registrySelectedKeys[s.Source+"\x00"+s.Slug]
 			}
 
 			focusMarker := " "
-			if idx == m.registrySelected {
+			if actualIdx == m.registrySelected {
 				focusMarker = ">"
 			}
 			selectMarker := " "
@@ -1924,7 +1998,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			truncatedPlain := truncate(plainNameAndSource, availNameWidth)
 
 			var styledText string
-			if idx == m.registrySelected {
+			if actualIdx == m.registrySelected {
 				// Highlighted row is formatted entirely by selectedStyle/inactiveSelectedStyle, keep plain
 				styledText = truncatedPlain
 			} else {
@@ -1952,7 +2026,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 			}
 			line += rightPart
 
-			if idx == m.registrySelected {
+			if actualIdx == m.registrySelected {
 				var lineStyled string
 				if m.registryFocusList {
 					lineStyled = selectedStyle.Render(rowIndent + padRight(prefix+truncatedPlain, rowWidth-rightPartWidth-1) + " " + rightPart)
@@ -1964,9 +2038,19 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 				leftContentLines = append(leftContentLines, line)
 			}
 		}
+		if showScrollIndicator && resultSlots > 1 {
+			parts := []string{}
+			if start > 0 {
+				parts = append(parts, fmt.Sprintf("↑ %d more", start))
+			}
+			if end < len(m.registryResults) {
+				parts = append(parts, fmt.Sprintf("↓ %d more", len(m.registryResults)-end))
+			}
+			leftContentLines = append(leftContentLines, "  "+dimStyle.Render(strings.Join(parts, "  ")))
+		}
 	}
 
-	leftPane := fitLines(strings.Join(leftContentLines, "\n"), innerHeight)
+	leftPane := clampBlockWidth(fitLines(strings.Join(leftContentLines, "\n"), innerHeight), leftWidth)
 
 	// Right pane: detail preview / bulk details
 	var rightContentLines []string
@@ -1983,7 +2067,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		}
 
 		rightContentLines = append(rightContentLines,
-			titleStyle.Render("Preview/Details: "+s.DisplayName),
+			titleStyle.Render(truncate("Preview/Details: "+s.DisplayName, rightWidth)),
 			"",
 		)
 
@@ -2074,7 +2158,7 @@ func (m appModel) registryModalOverlay(layout appLayout) string {
 		rightContentLines = append(rightContentLines, dimStyle.Render("Select a registry search result to view details."))
 	}
 
-	rightPane := scrollableFitLines(strings.Join(rightContentLines, "\n"), innerHeight, m.registryPreviewOffset)
+	rightPane := clampBlockWidth(scrollableFitLines(strings.Join(rightContentLines, "\n"), innerHeight, m.registryPreviewOffset), rightWidth)
 
 	// Vertical divider
 	var dividerLines []string

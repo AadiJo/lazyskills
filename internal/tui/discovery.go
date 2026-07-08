@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/alvinunreal/lazyskills/internal/frontmatter"
@@ -350,6 +351,18 @@ func isGitRepo(dir string) bool {
 	return err == nil && st.IsDir()
 }
 
+type cloneFlight struct {
+	wg      sync.WaitGroup
+	dir     string
+	cleanup func()
+	err     error
+}
+
+var cachedSourceCloneFlights = struct {
+	sync.Mutex
+	m map[string]*cloneFlight
+}{m: make(map[string]*cloneFlight)}
+
 // cachedSourceClone returns a directory holding a shallow clone of the remote
 // source. A cached clone is reused unless force is set; on a cache miss (or
 // force) it clones fresh. The returned cleanup removes throwaway directories
@@ -368,6 +381,10 @@ func cachedSourceClone(url, ref string, force bool) (dir string, cleanup func(),
 			os.RemoveAll(tmp)
 			return "", noop, cloneErr
 		}
+		if !isGitRepo(tmp) {
+			os.RemoveAll(tmp)
+			return "", noop, fmt.Errorf("clone did not produce a git repository")
+		}
 		return tmp, func() { os.RemoveAll(tmp) }, nil
 	}
 
@@ -376,46 +393,78 @@ func cachedSourceClone(url, ref string, force bool) (dir string, cleanup func(),
 		return dir, noop, nil
 	}
 
-	os.RemoveAll(dir)
-	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+	if !force {
+		key := cloneCacheKey(url, ref)
+		cachedSourceCloneFlights.Lock()
+		if inFlight := cachedSourceCloneFlights.m[key]; inFlight != nil {
+			cachedSourceCloneFlights.Unlock()
+			inFlight.wg.Wait()
+			return inFlight.dir, inFlight.cleanup, inFlight.err
+		}
+		flight := &cloneFlight{cleanup: noop}
+		flight.wg.Add(1)
+		cachedSourceCloneFlights.m[key] = flight
+		cachedSourceCloneFlights.Unlock()
+
+		defer func() {
+			flight.dir = dir
+			flight.cleanup = cleanup
+			flight.err = err
+			flight.wg.Done()
+
+			cachedSourceCloneFlights.Lock()
+			delete(cachedSourceCloneFlights.m, key)
+			cachedSourceCloneFlights.Unlock()
+		}()
+	}
+
+	if !force && isGitRepo(dir) {
+		return dir, noop, nil
+	}
+	if mkErr := os.MkdirAll(root, 0o755); mkErr != nil {
 		return "", noop, mkErr
 	}
-	if cloneErr := gitClone(url, ref, dir); cloneErr != nil {
-		os.RemoveAll(dir)
+	tmp, tmpErr := os.MkdirTemp(root, ".clone-*")
+	if tmpErr != nil {
+		return "", noop, tmpErr
+	}
+	removeTmp := func() { os.RemoveAll(tmp) }
+	if cloneErr := gitClone(url, ref, tmp); cloneErr != nil {
+		removeTmp()
 		return "", noop, cloneErr
 	}
-	return dir, noop, nil
+	if !isGitRepo(tmp) {
+		removeTmp()
+		return "", noop, fmt.Errorf("clone did not produce a git repository")
+	}
+
+	if force {
+		return tmp, removeTmp, nil
+	}
+
+	if renameErr := os.Rename(tmp, dir); renameErr == nil {
+		return dir, noop, nil
+	}
+	if isGitRepo(dir) {
+		removeTmp()
+		return dir, noop, nil
+	}
+	removeTmp()
+	return "", noop, fmt.Errorf("failed to publish clone to cache")
 }
 
 func parseRemoteGitHubSource(source string) (url string, ref string, ok bool) {
-	repoPart := source
-	if idx := strings.Index(source, "#"); idx != -1 {
-		repoPart = source[:idx]
-		ref = source[idx+1:]
-	}
-
-	if strings.HasPrefix(repoPart, "https://github.com/") {
-		repoPart = strings.TrimPrefix(repoPart, "https://github.com/")
-	} else if strings.HasPrefix(repoPart, "github:") {
-		repoPart = strings.TrimPrefix(repoPart, "github:")
-	}
-
-	repoPart = strings.TrimSuffix(repoPart, ".git")
-
-	parts := strings.Split(repoPart, "/")
-	if len(parts) != 2 {
+	parsed, ok := parseSource(source)
+	if !ok || parsed.Folder != "" {
 		return "", "", false
 	}
-	owner, repo := parts[0], parts[1]
-	if !isSafeGitHubToken(owner) || !isSafeGitHubToken(repo) {
+	if parsed.Host != "" && parsed.Host != "github.com" {
 		return "", "", false
 	}
-
-	if ref != "" && !isSafeGitHubRef(ref) {
+	if !parsed.validRepo() || !parsed.validRef() {
 		return "", "", false
 	}
-
-	return fmt.Sprintf("https://github.com/%s/%s", owner, repo), ref, true
+	return fmt.Sprintf("https://github.com/%s/%s", parsed.Owner, parsed.Repo), parsed.Ref, true
 }
 
 func isSafeGitHubToken(s string) bool {

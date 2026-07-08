@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/alvinunreal/lazyskills/internal/atomicfile"
 	"github.com/alvinunreal/lazyskills/internal/model"
 )
 
@@ -77,7 +78,7 @@ func RemoveEntry(path, key string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(out, '\n'), 0o644)
+	return atomicfile.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // RemoveEntryIfExists deletes a lock entry when both the lock file and key are
@@ -108,5 +109,5 @@ func RemoveEntryIfExists(path, key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(path, append(out, '\n'), 0o644)
+	return true, atomicfile.WriteFile(path, append(out, '\n'), 0o644)
 }

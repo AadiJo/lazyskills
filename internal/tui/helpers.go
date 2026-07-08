@@ -7,7 +7,7 @@ import (
 
 	"github.com/alvinunreal/lazyskills/internal/compat"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/reflow/wordwrap"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // humanizeSince renders a coarse, git-style relative age ("just now", "5m ago").
@@ -28,26 +28,10 @@ func humanizeSince(t time.Time) string {
 }
 
 func wrap(s string, width int) string {
-	if width <= 8 || len(s) <= width {
+	if width <= 8 || xansi.StringWidth(s) <= width {
 		return s
 	}
-	words := strings.Fields(s)
-	lines := []string{}
-	current := ""
-	for _, word := range words {
-		if len(current)+len(word)+1 > width {
-			lines = append(lines, current)
-			current = word
-		} else if current == "" {
-			current = word
-		} else {
-			current += " " + word
-		}
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
-	return strings.Join(lines, "\n")
+	return xansi.Wrap(strings.Join(strings.Fields(s), " "), width, " ")
 }
 
 func wrapText(s string, width int) string {
@@ -55,7 +39,7 @@ func wrapText(s string, width int) string {
 		return ""
 	}
 	s = strings.ReplaceAll(s, "\t", "    ")
-	return wordwrap.String(s, width)
+	return xansi.Wrap(s, width, " ")
 }
 
 func indent(s string, prefix string) string {
@@ -78,11 +62,31 @@ func formatMetaLine(key, val string, width int) string {
 }
 
 func truncate(s string, width int) string {
-	runes := []rune(s)
-	if width <= 1 || len(runes) <= width {
+	if width <= 1 || xansi.StringWidth(s) <= width {
 		return s
 	}
-	return string(runes[:width-1]) + "…"
+	return xansi.Truncate(s, width, "…")
+}
+
+func clampLineWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if xansi.StringWidth(s) <= width {
+		return s
+	}
+	return xansi.Truncate(s, width, "")
+}
+
+func clampBlockWidth(s string, width int) string {
+	if width <= 0 || s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = clampLineWidth(line, width)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fitLines(s string, height int) string {
@@ -105,14 +109,7 @@ func fitToScreen(s string, width, height int) string {
 		lines = lines[:height]
 	}
 	for i, line := range lines {
-		for lipgloss.Width(line) > width {
-			runes := []rune(line)
-			if len(runes) == 0 {
-				break
-			}
-			line = string(runes[:len(runes)-1])
-		}
-		lines[i] = line
+		lines[i] = clampLineWidth(line, width)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -311,14 +308,13 @@ func decoratePane(rendered string, p paneLayout, focused bool, title string) str
 }
 
 func truncateTitle(s string, width int) string {
-	runes := []rune(s)
-	if len(runes) <= width {
+	if xansi.StringWidth(s) <= width {
 		return s
 	}
 	if width <= 1 {
 		return "…"
 	}
-	return string(runes[:width-1]) + "…"
+	return xansi.Truncate(s, width, "…")
 }
 
 func (m appModel) installedSkillNames(group string) map[string]bool {

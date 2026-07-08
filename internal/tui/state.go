@@ -651,12 +651,24 @@ func (m appModel) checkRegistrySkillStatus(s registry.Skill) (RegistryMatchStatu
 }
 
 func normalizeSource(src string) string {
+	parsed, ok := parseSource(src)
+	if !ok {
+		return normalizeSourceFallback(src)
+	}
+	out := strings.ToLower(parsed.repoSlug())
+	if parsed.Folder != "" {
+		out += "/" + strings.ToLower(parsed.Folder)
+	}
+	return out
+}
+
+func normalizeSourceFallback(src string) string {
 	src = strings.ToLower(strings.TrimSpace(src))
 	src = strings.TrimPrefix(src, "git+https://")
 	src = strings.TrimPrefix(src, "https://")
 	src = strings.TrimPrefix(src, "http://")
-	src = strings.TrimPrefix(src, "git@")   // for ssh URLs
-	src = strings.ReplaceAll(src, ":", "/") // normalize git@github.com:foo/bar
+	src = strings.TrimPrefix(src, "git@")
+	src = strings.ReplaceAll(src, ":", "/")
 	src = strings.TrimSuffix(src, ".git")
 	src = strings.TrimRight(src, "/")
 	for _, host := range []string{"github.com/", "gitlab.com/"} {

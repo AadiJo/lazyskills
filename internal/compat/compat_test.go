@@ -51,3 +51,24 @@ func TestStripTerminalEscapesRemovesBareEsc(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestStripTerminalEscapesRemovesControlSequences(t *testing.T) {
+	input := "a\x1b[31mred\x1b[0m" +
+		"\x1b]8;;https://example.com\x07link\x1b]8;;\x07" +
+		"\x1bPignored\x1b\\" +
+		"\x1b_ignored\x1b\\" +
+		"\x07\b\rc\x90d"
+	got := StripTerminalEscapes(input)
+	want := "aredlinkc"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripTerminalEscapesPreservesPreviewNewlinesAndTabs(t *testing.T) {
+	got := StripTerminalEscapes("one\n\ttwo\rthree")
+	want := "one\n\ttwothree"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

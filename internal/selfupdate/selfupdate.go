@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alvinunreal/lazyskills/internal/atomicfile"
 	"github.com/alvinunreal/lazyskills/internal/buildinfo"
+	"golang.org/x/mod/semver"
 )
 
 type UpdateStatus string
@@ -112,19 +114,15 @@ func writeCache(rel *GitHubRelease) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	cd := CacheData{
 		LastChecked: time.Now(),
 		Release:     *rel,
 	}
-	return json.NewEncoder(f).Encode(cd)
+	b, err := json.Marshal(cd)
+	if err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(path, append(b, '\n'), 0o644)
 }
 
 func CleanVersion(v string) string {
@@ -136,65 +134,36 @@ func CleanVersion(v string) string {
 }
 
 func CompareVersions(v1, v2 string) int {
-	v1 = CleanVersion(v1)
-	v2 = CleanVersion(v2)
-
-	if v1 == v2 {
+	s1, ok1 := normalizeSemver(v1)
+	s2, ok2 := normalizeSemver(v2)
+	if ok1 && ok2 {
+		return semver.Compare(s1, s2)
+	}
+	c1 := CleanVersion(v1)
+	c2 := CleanVersion(v2)
+	if c1 == c2 {
 		return 0
 	}
-
-	parts1 := strings.SplitN(v1, "-", 2)
-	parts2 := strings.SplitN(v2, "-", 2)
-
-	main1 := parts1[0]
-	main2 := parts2[0]
-
-	nums1 := parseVersionComponents(main1)
-	nums2 := parseVersionComponents(main2)
-
-	for i := 0; i < len(nums1) || i < len(nums2); i++ {
-		n1 := 0
-		if i < len(nums1) {
-			n1 = nums1[i]
-		}
-		n2 := 0
-		if i < len(nums2) {
-			n2 = nums2[i]
-		}
-		if n1 < n2 {
-			return -1
-		}
-		if n1 > n2 {
-			return 1
-		}
-	}
-
-	if len(parts1) == 1 && len(parts2) > 1 {
-		return 1
-	}
-	if len(parts1) > 1 && len(parts2) == 1 {
+	if c1 < c2 {
 		return -1
 	}
-	if len(parts1) > 1 && len(parts2) > 1 {
-		if parts1[1] < parts2[1] {
-			return -1
-		}
-		if parts1[1] > parts2[1] {
-			return 1
-		}
-	}
-	return 0
+	return 1
 }
 
-func parseVersionComponents(v string) []int {
-	parts := strings.Split(v, ".")
-	res := make([]int, len(parts))
-	for i, p := range parts {
-		var n int
-		fmt.Sscanf(p, "%d", &n)
-		res[i] = n
+func normalizeSemver(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
 	}
-	return res
+	if v[0] == 'V' {
+		v = "v" + v[1:]
+	} else if v[0] != 'v' {
+		v = "v" + v
+	}
+	if semver.IsValid(v) {
+		return v, true
+	}
+	return "", false
 }
 
 func isManagedByDpkg(path string) bool {

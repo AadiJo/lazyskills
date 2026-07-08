@@ -1,6 +1,7 @@
 package locks
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,9 @@ func TestRemoveEntry(t *testing.T) {
 	path := filepath.Join(dir, "skills-lock.json")
 	content := `{"version":1,"extra":"keep","skills":{"a":{"source":"o/r"},"b":{"source":"o/r2"}}}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -33,6 +37,21 @@ func TestRemoveEntry(t *testing.T) {
 	raw, _ := os.ReadFile(path)
 	if !strings.Contains(string(raw), `"extra"`) {
 		t.Errorf("expected unknown top-level field to be preserved, got %s", raw)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("rewritten lock is invalid JSON: %v", err)
+	}
+	if root["extra"] != "keep" {
+		t.Fatalf("expected unknown top-level field value to be preserved, got %#v", root["extra"])
+	}
+	assertNoAtomicTemps(t, dir)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat rewritten lock: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected existing lock mode 0600 to be preserved, got %v", info.Mode().Perm())
 	}
 
 	if err := RemoveEntry(path, "missing"); err == nil {
@@ -66,5 +85,26 @@ func TestRemoveEntryIfExistsIgnoresMissingFileAndKey(t *testing.T) {
 	raw, _ := os.ReadFile(path)
 	if strings.Contains(string(raw), `"a"`) || !strings.Contains(string(raw), `"b"`) || !strings.Contains(string(raw), `"extra"`) {
 		t.Fatalf("expected a pruned while preserving b and extra, got %s", raw)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("rewritten lock is invalid JSON: %v", err)
+	}
+	if root["extra"] != "keep" {
+		t.Fatalf("expected unknown top-level field value to be preserved, got %#v", root["extra"])
+	}
+	assertNoAtomicTemps(t, dir)
+}
+
+func assertNoAtomicTemps(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") {
+			t.Fatalf("unexpected leftover temp file %q", entry.Name())
+		}
 	}
 }
