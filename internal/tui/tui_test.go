@@ -2345,6 +2345,9 @@ func TestRemoteDiscoverySuccess(t *testing.T) {
 	gitClone = func(url, ref, tempDir string) error {
 		capturedURL = url
 		capturedRef = ref
+		if err := os.MkdirAll(filepath.Join(tempDir, ".git"), 0o755); err != nil {
+			return err
+		}
 		skillPath := filepath.Join(tempDir, "SKILL.md")
 		skillContent := "---\nname: \"Remote Skill\"\ndescription: \"Remote description\"\n---\nRemote preview content"
 		if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
@@ -2408,11 +2411,11 @@ func TestRemoteDiscoveryFailure(t *testing.T) {
 		width: 120, height: 32, selected: 0,
 		result: model.ScanResult{
 			Skills: []*model.Skill{
-				{Name: "Existing", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo"}},
+				{Name: "Existing", Scope: model.ScopeProject, LocalLock: &model.LocalLockEntry{Source: "owner/repo-fail"}},
 			},
 		},
 	}
-	updated, cmd := m.startDiscovery("owner/repo", false)
+	updated, cmd := m.startDiscovery("owner/repo-fail", false)
 	if cmd == nil {
 		t.Fatal("expected discovery cmd")
 	}
@@ -2420,7 +2423,7 @@ func TestRemoteDiscoveryFailure(t *testing.T) {
 	updated, _ = updated.Update(msg)
 	next := updated.(appModel)
 
-	disc := next.discovery["owner/repo"]
+	disc := next.discovery["owner/repo-fail"]
 	if disc.Status != DiscoveryFailed {
 		t.Fatalf("expected status failed, got %s", disc.Status)
 	}
@@ -2488,6 +2491,9 @@ func TestRemoteDiscoverySanitization(t *testing.T) {
 	defer func() { gitClone = oldGitClone }()
 
 	gitClone = func(url, ref, tempDir string) error {
+		if err := os.MkdirAll(filepath.Join(tempDir, ".git"), 0o755); err != nil {
+			return err
+		}
 		skillPath := filepath.Join(tempDir, "SKILL.md")
 		skillContent := "---\nname: \"Bad\\u001b[31m Skill\"\ndescription: \"Bad\\u001b[31m Description\"\n---\nBad\x1b[31m preview content"
 		if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {

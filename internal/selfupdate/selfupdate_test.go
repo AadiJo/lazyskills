@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,11 @@ func TestCompareVersions(t *testing.T) {
 		{"v1.0.0-alpha", "v1.0.0", -1},
 		{"v1.0.0", "v1.0.0-beta", 1},
 		{"v1.0.0-alpha", "v1.0.0-beta", -1},
+		{"v1.0.0-alpha.2", "v1.0.0-alpha.10", -1},
+		{"v1.0.0-rc.1", "v1.0.0", -1},
+		{"V1.0.0", "v1.0.0", 0},
+		{"dev", "dev", 0},
+		{"dev", "v1.0.0", 1},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +180,49 @@ func TestPlanAndCacheTTL(t *testing.T) {
 		t.Errorf("expected unknown/disabled status, got status=%s, reason=%s", planEnv.Status, planEnv.Reason)
 	}
 	os.Setenv("LAZYSKILLS_NO_UPDATE_CHECK", "")
+}
+
+func TestWriteCacheReadCacheRoundTrip(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+
+	rel := &GitHubRelease{
+		TagName: "v1.2.3",
+		HTMLURL: "https://github.com/alvinunreal/lazyskills/releases/tag/v1.2.3",
+		Body:    "cache body",
+	}
+	if err := writeCache(rel); err != nil {
+		t.Fatalf("writeCache: %v", err)
+	}
+
+	got, err := readCache(time.Hour)
+	if err != nil {
+		t.Fatalf("readCache: %v", err)
+	}
+	if got.TagName != rel.TagName || got.HTMLURL != rel.HTMLURL || got.Body != rel.Body {
+		t.Fatalf("readCache = %+v; want %+v", got, rel)
+	}
+
+	cachePath, err := getCachePath()
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("stat cache file: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("expected new cache file mode 0644, got %v", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Dir(cachePath))
+	if err != nil {
+		t.Fatalf("ReadDir cache dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") {
+			t.Fatalf("unexpected leftover temp file %q", entry.Name())
+		}
+	}
 }
 func TestRecoveryAdvice(t *testing.T) {
 	tests := []struct {

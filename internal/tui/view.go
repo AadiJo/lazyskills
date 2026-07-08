@@ -2,8 +2,7 @@ package tui
 
 import (
 	"fmt"
-	"html"
-	"regexp"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -17,10 +16,8 @@ import (
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
 	"github.com/charmbracelet/lipgloss"
+	xhtml "golang.org/x/net/html"
 )
-
-var htmlBlockTagRE = regexp.MustCompile(`(?i)</?(?:br|p|div|li|h1|h2|h3|h4)\b[^>]*>`)
-var htmlTagRE = regexp.MustCompile(`<[^>]+>`)
 
 func (m appModel) View() string {
 	viewStart := time.Now()
@@ -780,14 +777,81 @@ func sanitizeRegistryPreviewContent(markdown string) string {
 	markdown = compat.SanitizePreviewContent(markdown)
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	markdown = strings.ReplaceAll(markdown, "\r", "\n")
-	markdown = htmlBlockTagRE.ReplaceAllString(markdown, "\n")
-	markdown = htmlTagRE.ReplaceAllString(markdown, "")
-	markdown = html.UnescapeString(markdown)
+	markdown = registryPreviewPlainText(markdown)
 	lines := strings.Split(markdown, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimRight(line, " \t")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func registryPreviewPlainText(markdown string) string {
+	var b strings.Builder
+	z := xhtml.NewTokenizer(strings.NewReader(markdown))
+	skipDepth := 0
+	lastWasNewline := false
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case xhtml.ErrorToken:
+			if z.Err() == io.EOF {
+				return b.String()
+			}
+			return b.String()
+		case xhtml.TextToken:
+			if skipDepth == 0 {
+				text := z.Token().Data
+				b.WriteString(text)
+				lastWasNewline = strings.HasSuffix(text, "\n")
+			}
+		case xhtml.StartTagToken, xhtml.SelfClosingTagToken:
+			tag := z.Token().DataAtom.String()
+			if tag == "" {
+				tag = strings.ToLower(z.Token().Data)
+			}
+			if tag == "script" || tag == "style" {
+				if tt == xhtml.StartTagToken {
+					skipDepth++
+				}
+				continue
+			}
+			if skipDepth == 0 && registryPreviewBlockTag(tag) {
+				writeRegistryPreviewNewline(&b, &lastWasNewline)
+			}
+		case xhtml.EndTagToken:
+			tag := z.Token().DataAtom.String()
+			if tag == "" {
+				tag = strings.ToLower(z.Token().Data)
+			}
+			if tag == "script" || tag == "style" {
+				if skipDepth > 0 {
+					skipDepth--
+				}
+				continue
+			}
+			if skipDepth == 0 && registryPreviewBlockTag(tag) {
+				writeRegistryPreviewNewline(&b, &lastWasNewline)
+			}
+		}
+	}
+}
+
+func writeRegistryPreviewNewline(b *strings.Builder, lastWasNewline *bool) {
+	if *lastWasNewline {
+		return
+	}
+	b.WriteByte('\n')
+	*lastWasNewline = true
+}
+
+func registryPreviewBlockTag(tag string) bool {
+	switch tag {
+	case "br", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6":
+		return true
+	default:
+		return false
+	}
 }
 
 func appendRegistryPreviewLines(lines []string, title string, markdown string, width int, maxLines int) []string {
@@ -1781,31 +1845,11 @@ func truncateReleaseNotes(notes string, width int) string {
 }
 
 func parseSourceURLDetails(source string) (repo string, folder string) {
-	src := source
-	src = strings.TrimPrefix(src, "git+https://")
-	src = strings.TrimPrefix(src, "https://")
-	src = strings.TrimPrefix(src, "http://")
-	src = strings.TrimPrefix(src, "git@")
-	src = strings.ReplaceAll(src, ":", "/")
-	src = strings.TrimSuffix(src, ".git")
-	src = strings.TrimRight(src, "/")
-
-	// Remove host prefix
-	for _, host := range []string{"github.com/", "gitlab.com/"} {
-		src = strings.TrimPrefix(src, host)
+	parsed, ok := parseSource(source)
+	if !ok {
+		return legacySourceURLDetails(source)
 	}
-
-	// Now src should look like "owner/repo/sub/folders" or just "owner/repo"
-	parts := strings.Split(src, "/")
-	if len(parts) >= 2 {
-		repo = parts[0] + "/" + parts[1]
-		if len(parts) > 2 {
-			folder = strings.Join(parts[2:], "/")
-		}
-	} else {
-		repo = src
-	}
-	return repo, folder
+	return parsed.repoSlug(), parsed.Folder
 }
 
 func (m appModel) registrySelectedCount() int {

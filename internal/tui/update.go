@@ -1982,15 +1982,20 @@ type registryPreviewMsg struct {
 }
 
 func deriveRawGitHubURLs(source string) []string {
-	repo, folder := parseSourceURLDetails(source)
-	parts := strings.Split(repo, "/")
-	if len(parts) < 2 {
+	parsed, ok := parseSource(source)
+	if !ok || (parsed.Host != "" && parsed.Host != "github.com") || !parsed.validRepo() || !parsed.validRef() {
 		return nil
 	}
-	owner, name := parts[0], parts[1]
+	folder, ok := escapedSourceFolder(parsed.Folder)
+	if !ok {
+		return nil
+	}
 
 	var urls []string
 	branches := []string{"main", "master"}
+	if parsed.Ref != "" {
+		branches = []string{parsed.Ref}
+	}
 	files := []string{"SKILL.md", "README.md", "README"}
 
 	for _, branch := range branches {
@@ -2001,7 +2006,7 @@ func deriveRawGitHubURLs(source string) []string {
 			} else {
 				path = file
 			}
-			urls = append(urls, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, name, branch, path))
+			urls = append(urls, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", parsed.Owner, parsed.Repo, branch, path))
 		}
 	}
 	return urls

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alvinunreal/lazyskills/internal/model"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 var unsafeNameChars = regexp.MustCompile(`[^a-z0-9._]+`)
@@ -28,21 +29,26 @@ func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-var csiRE = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
-var oscRE = regexp.MustCompile(`\x1b\][\s\S]*?(?:\x07|\x1b\\)`)
-var dcsPMAPCRE = regexp.MustCompile(`\x1b[P^_][\s\S]*?(?:\x1b\\)`)
-var simpleEscRE = regexp.MustCompile(`\x1b[\x20-\x7e]`)
-var c1RE = regexp.MustCompile(`[\x80-\x9f]`)
-var controlRE = regexp.MustCompile(`[\x00-\x06\x07\x08\x0b\x0c\x0d-\x1b\x1c-\x1f\x7f]`)
 var newlineRE = regexp.MustCompile(`[\r\n]+`)
 
 func StripTerminalEscapes(str string) string {
-	str = oscRE.ReplaceAllString(str, "")
-	str = dcsPMAPCRE.ReplaceAllString(str, "")
-	str = csiRE.ReplaceAllString(str, "")
-	str = simpleEscRE.ReplaceAllString(str, "")
-	str = c1RE.ReplaceAllString(str, "")
-	return controlRE.ReplaceAllString(str, "")
+	return stripUnsafeControls(xansi.Strip(str))
+
+}
+
+func stripUnsafeControls(str string) string {
+	var b strings.Builder
+	for _, r := range str {
+		if r == '\n' || r == '\t' {
+			b.WriteRune(r)
+			continue
+		}
+		if r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func SanitizeMetadata(str string) string {
