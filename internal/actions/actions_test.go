@@ -583,3 +583,25 @@ func TestForAvailableSkills(t *testing.T) {
 		t.Fatalf("expected global batch size 2, got %d", len(globalPreview.Exec.Batch))
 	}
 }
+
+func TestToggleForSkillBuildsScopeShelfMoves(t *testing.T) {
+	skill := &model.Skill{Name: "Deploy", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{
+		{Path: "/tmp/a/deploy", Scope: model.ScopeProject, Agent: "a", Status: model.StatusCopy},
+		{Path: "/tmp/b/.lazyskills-disabled/deploy", TargetPath: "/tmp/b/deploy", Scope: model.ScopeProject, Agent: "b", Status: model.StatusDisabled},
+	}}
+	previews := ToggleForSkill(skill, "", "")
+	if len(previews) != 2 || previews[0].Exec.Internal != "disable_skill" || previews[1].Exec.Internal != "enable_skill" {
+		t.Fatalf("unexpected toggle previews: %+v", previews)
+	}
+}
+
+func TestToggleForSkillsCombinesShelfMoves(t *testing.T) {
+	skills := []*model.Skill{
+		{Name: "One", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Path: "/tmp/a/one", Scope: model.ScopeProject, Agent: "codex", Status: model.StatusCopy}}},
+		{Name: "Two", Scope: model.ScopeProject, ObservedPaths: []model.ObservedPath{{Path: "/tmp/a/two", Scope: model.ScopeProject, Agent: "codex", Status: model.StatusCopy}}},
+	}
+	previews := ToggleForSkills(skills, "codex", "Codex")
+	if len(previews) != 1 || previews[0].ID != "bulk_disable_skill" || previews[0].Exec.Internal != "disable_skill" || len(previews[0].Exec.Args) != 2 {
+		t.Fatalf("unexpected combined toggle preview: %+v", previews)
+	}
+}

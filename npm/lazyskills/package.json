@@ -1,0 +1,35 @@
+{
+  "name": "@aadijo/lazyskills",
+  "version": "0.0.1",
+  "description": "Mission control for agent skills",
+  "license": "MIT",
+  "homepage": "https://github.com/AadiJo/lazyskills",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AadiJo/lazyskills.git"
+  },
+  "type": "module",
+  "bin": {
+    "lazyskills": "bin/lazyskills.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "optionalDependencies": {
+    "@aadijo/lazyskills-darwin-arm64": "0.0.1",
+    "@aadijo/lazyskills-darwin-x64": "0.0.1",
+    "@aadijo/lazyskills-linux-arm64": "0.0.1",
+    "@aadijo/lazyskills-linux-x64": "0.0.1",
+    "@aadijo/lazyskills-win32-x64": "0.0.1"
+  }
+}

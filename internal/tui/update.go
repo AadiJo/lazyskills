@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,10 +13,10 @@ import (
 
 	"github.com/alvinunreal/lazyskills/internal/actions"
 	"github.com/alvinunreal/lazyskills/internal/compat"
-	"github.com/alvinunreal/lazyskills/internal/locks"
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/registry"
 	"github.com/alvinunreal/lazyskills/internal/runner"
+	"github.com/alvinunreal/lazyskills/internal/skillops"
 )
 
 const previewRefreshDelay = 300 * time.Millisecond
@@ -1390,217 +1388,19 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.actionResult = nil
 		return m.startDiscovery(action.ConfirmValue, true)
 	}
-	if action.Exec.Internal == "enable_skill" || action.Exec.Internal == "disable_skill" {
+	if result, partialSuccess, handled := skillops.ExecuteInternal(action, m.cwd, m.result); handled {
 		m.confirming = false
 		m.confirmInput = ""
 		m.confirmError = ""
-		m.actionResult = nil
-
-		type moveItem struct {
-			src, dest string
-		}
-		var plan []moveItem
-		seenSrc := map[string]bool{}
-
-		if action.Exec.Internal == "disable_skill" {
-			for _, path := range action.Exec.Args {
-				src := path
-				dest := filepath.Join(filepath.Dir(src), ".lazyskills-disabled", filepath.Base(src))
-				if !seenSrc[src] {
-					seenSrc[src] = true
-					plan = append(plan, moveItem{src: src, dest: dest})
-				}
-			}
-		} else { // enable_skill
-			for i := 0; i < len(action.Exec.Args); i += 2 {
-				if i+1 >= len(action.Exec.Args) {
-					break
-				}
-				src := action.Exec.Args[i]
-				dest := action.Exec.Args[i+1]
-				if !seenSrc[src] {
-					seenSrc[src] = true
-					plan = append(plan, moveItem{src: src, dest: dest})
-				}
-			}
-		}
-
-		// Preflight validation
-		var errs []string
-		for _, item := range plan {
-			// Check if source exists
-			_, err := os.Lstat(item.src)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("source path does not exist: %s", item.src))
-				continue
-			}
-
-			// Destination must not exist
-			if _, err := os.Lstat(item.dest); err == nil || !os.IsNotExist(err) {
-				errs = append(errs, fmt.Sprintf("destination already exists: %s", item.dest))
-				continue
-			}
-
-			// Parent directory check
-			parent := filepath.Dir(item.dest)
-			parentInfo, err := os.Stat(parent)
-			if err == nil {
-				if !parentInfo.IsDir() {
-					errs = append(errs, fmt.Sprintf("parent of destination is not a directory: %s", parent))
-				}
-			} else if !os.IsNotExist(err) {
-				errs = append(errs, fmt.Sprintf("failed to check parent directory %s: %v", parent, err))
-			}
-		}
-
-		succeededMoves := 0
-		if len(errs) == 0 {
-			// Execution
-			for _, item := range plan {
-				parent := filepath.Dir(item.dest)
-				if err := os.MkdirAll(parent, 0755); err != nil {
-					errs = append(errs, fmt.Sprintf("failed to create directory %s: %v", parent, err))
-					break
-				}
-				if err := os.Rename(item.src, item.dest); err != nil {
-					errs = append(errs, fmt.Sprintf("failed to move %s to %s: %v", item.src, item.dest, err))
-					break
-				}
-				succeededMoves++
-			}
-		}
-
-		if len(errs) > 0 {
-			m.actionResult = &runner.Result{
-				Program:  action.Exec.Internal,
-				Args:     action.Exec.Args,
-				ExitCode: -1,
-				Err:      compat.SanitizeMetadata(strings.Join(errs, "; ")),
-			}
-			m.syncViewport()
-			if succeededMoves > 0 {
-				return m, loadSnapshot(m.cwd)
-			}
-			return m, nil
-		}
-
-		// Success: rescan
-		return m, loadSnapshot(m.cwd)
-	}
-	if action.Exec.Internal == "prune_project_lock" || action.Exec.Internal == "prune_global_lock" {
-		m.commands = false
-		m.confirming = false
-		m.confirmInput = ""
-		m.confirmError = ""
-		path := locks.ProjectLockPath(m.cwd)
-		if action.Exec.Internal == "prune_global_lock" {
-			path = locks.GlobalLockPath()
-		}
-		if err := locks.RemoveEntry(path, action.ConfirmValue); err != nil {
-			m.actionResult = &runner.Result{
-				Program:  "prune-lock",
-				Args:     []string{action.ConfirmValue},
-				ExitCode: -1,
-				Err:      compat.SanitizeMetadata(err.Error()),
-			}
-			m.syncViewport()
-			return m, nil
-		}
-		// Success: rescan drops the now-pruned phantom from the list.
-		m.actionResult = nil
-		return m, loadSnapshot(m.cwd)
-	}
-	if action.Exec.Internal == "delete_broken_symlink" {
-		m.commands = false
-		m.confirming = false
-		m.confirmInput = ""
-		m.confirmError = ""
-		if len(action.Exec.Args) < 2 || action.Exec.Args[0] == "" || action.Exec.Args[1] == "" {
-			m.actionResult = &runner.Result{Program: "delete-broken-symlink", Args: []string{action.ConfirmValue}, ExitCode: -1, Err: "delete action is missing scoped skill identity"}
-			m.syncViewport()
-			return m, nil
-		}
-		targetScope := action.Exec.Args[0]
-		targetName := action.Exec.Args[1]
-		removed, failed := 0, 0
-		firstErr := ""
-		for _, sk := range m.result.Skills {
-			if sk.Name != targetName || string(sk.Scope) != targetScope {
-				continue
-			}
-			for _, op := range sk.ObservedPaths {
-				if op.Status != model.StatusBrokenSymlink {
-					continue // safety: never touch working symlinks or canonical files
-				}
-				info, err := os.Lstat(op.Path)
-				if err != nil {
-					if os.IsNotExist(err) {
-						continue
-					}
-					failed++
-					if firstErr == "" {
-						firstErr = err.Error()
-					}
-					continue
-				}
-				if info.Mode()&os.ModeSymlink == 0 {
-					continue
-				}
-				_, statErr := os.Stat(op.Path)
-				if statErr == nil {
-					continue // target exists again; no longer a broken symlink
-				}
-				if !os.IsNotExist(statErr) {
-					// If the target cannot be checked (for example EACCES while
-					// following the symlink), keep the symlink and surface the
-					// failure instead of risking deletion of a path that may no
-					// longer be broken.
-					failed++
-					if firstErr == "" {
-						firstErr = statErr.Error()
-					}
-					continue
-				}
-				if err := os.Remove(op.Path); err != nil {
-					failed++
-					if firstErr == "" {
-						firstErr = err.Error()
-					}
-					continue
-				}
-				removed++
-			}
-			break
-		}
-		if failed > 0 {
-			result := runner.Result{
-				Program:  "delete-broken-symlink",
-				Args:     []string{action.ConfirmValue},
-				ExitCode: -1,
-				Err:      fmt.Sprintf("removed %d broken symlink(s), %d failed: %s", removed, failed, compat.SanitizeMetadata(firstErr)),
-			}
-			m.actionResult = &result
-			m.syncViewport()
-			return m, loadSnapshotWithActionResult(m.cwd, result)
-		}
-		if removed == 0 {
-			result := runner.Result{
-				Program: "delete-broken-symlink",
-				Args:    []string{action.ConfirmValue},
-				Stdout:  "0 broken symlink(s) found at deletion time",
-			}
-			m.actionResult = &result
-			m.syncViewport()
-			return m, loadSnapshotWithActionResult(m.cwd, result)
-		}
-		result := runner.Result{
-			Program: "delete-broken-symlink",
-			Args:    []string{action.ConfirmValue},
-			Stdout:  fmt.Sprintf("%d broken symlink(s) removed", removed),
-		}
 		m.actionResult = &result
 		m.syncViewport()
-		return m, loadSnapshotWithActionResult(m.cwd, result)
+		if action.Exec.Internal == "delete_broken_symlink" && len(action.Exec.Args) >= 2 && action.Exec.Args[0] != "" && action.Exec.Args[1] != "" {
+			return m, loadSnapshotWithActionResult(m.cwd, result)
+		}
+		if result.ExitCode == 0 || partialSuccess {
+			return m, loadSnapshotWithActionResult(m.cwd, result)
+		}
+		return m, nil
 	}
 	if action.Exec.Internal == "refresh" {
 		m.actionResult = nil
@@ -1622,7 +1422,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 				result.ExitCode = -1
 				result.Err = err.Error()
 			}
-			partialSuccess := cleanupLockAfterRemove(action, m.cwd, &result)
+			partialSuccess := skillops.CleanupLockAfterRemove(action, m.cwd, &result)
 			return actionResultMsg{result: result, mutates: action.Mutates, partialSuccess: partialSuccess}
 		})
 	}
@@ -1635,7 +1435,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 		m.confirmError = ""
 		m.syncViewport()
 		return m, func() tea.Msg {
-			result, partialSuccess := m.runBatch(action.Exec.Batch)
+			result, partialSuccess := skillops.RunBatch(m.cwd, action.Exec.Batch, runExec)
 			return actionResultMsg{result: result, mutates: action.Mutates, partialSuccess: partialSuccess}
 		}
 	}
@@ -1649,7 +1449,7 @@ func (m appModel) executeAction(action actions.CommandPreview) (tea.Model, tea.C
 	m.syncViewport()
 	return m, func() tea.Msg {
 		result := runExec(spec)
-		partialSuccess := cleanupLockAfterRemove(action, m.cwd, &result)
+		partialSuccess := skillops.CleanupLockAfterRemove(action, m.cwd, &result)
 		return actionResultMsg{result: result, mutates: action.Mutates, partialSuccess: partialSuccess}
 	}
 }
@@ -1668,40 +1468,10 @@ func (m appModel) openRegistryModal() appModel {
 	return m
 }
 
-func cleanupLockAfterRemove(action actions.CommandPreview, cwd string, result *runner.Result) bool {
-	if action.ID != "remove" || result == nil || result.ExitCode != 0 || result.Err != "" || action.ConfirmValue == "" {
-		return false
-	}
-	path := locks.ProjectLockPath(cwd)
-	for _, arg := range action.Exec.Args {
-		if arg == "-g" || arg == "--global" {
-			path = locks.GlobalLockPath()
-			break
-		}
-	}
-	if _, err := locks.RemoveEntryIfExists(path, action.ConfirmValue); err != nil {
-		result.ExitCode = -1
-		result.Err = "removed skill, but failed to update lock: " + compat.SanitizeMetadata(err.Error())
-		return true
-	}
-	return false
-}
-
+// runBatch remains as the TUI seam used by existing tests; the behavior lives
+// in the UI-agnostic skillops package.
 func (m appModel) runBatch(batch []actions.ExecSpec) (runner.Result, bool) {
-	lines := []string{}
-	succeeded := 0
-	for i, spec := range batch {
-		runSpec := runner.ExecSpec{Program: spec.Program, Args: spec.Args, Cwd: m.cwd}
-		result := runExec(runSpec)
-		prefix := fmt.Sprintf("%d/%d %s", i+1, len(batch), compat.SanitizeMetadata(spec.Program))
-		if result.ExitCode != 0 || result.Err != "" {
-			result.Stdout = strings.Join(append(lines, prefix+" failed"), "\n")
-			return result, succeeded > 0
-		}
-		succeeded++
-		lines = append(lines, prefix+" ok")
-	}
-	return runner.Result{Program: "bulk", Cwd: m.cwd, ExitCode: 0, Stdout: strings.Join(lines, "\n")}, false
+	return skillops.RunBatch(m.cwd, batch, runExec)
 }
 
 func (m appModel) appendEnableDisableActions(previews []actions.CommandPreview, sk *model.Skill) []actions.CommandPreview {

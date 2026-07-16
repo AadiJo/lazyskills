@@ -20,6 +20,12 @@ lfs/
 
 # Release/build output
 dist/
+!internal/webserver/dist/
+!internal/webserver/dist/**
 /lazyskills
 /lazyskills.exe
 marketing
+
+# Web UI and npm release scratch
+webui/node_modules/
+.npm-release/

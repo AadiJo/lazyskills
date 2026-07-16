@@ -20,6 +20,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build embedded web UI
+        run: |
+          npm ci --prefix webui
+          npm run check --prefix webui
+          npm run build --prefix webui
+          git diff --exit-code -- internal/webserver/dist
+
       - name: Run tests
         run: go test ./...
 
@@ -33,3 +44,48 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
+
+  npm:
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Match npm versions to release tag
+        run: node scripts/prepare-npm-release.mjs "${GITHUB_REF_NAME}"
+      - name: Select npm dist-tag
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "NPM_DIST_TAG=next" >> "$GITHUB_ENV"
+          else
+            echo "NPM_DIST_TAG=latest" >> "$GITHUB_ENV"
+          fi
+      - name: Test launcher
+        run: |
+          node --test npm/lazyskills/test/launcher.test.js
+          node scripts/test-npm-pack.mjs
+      - name: Fetch verified release binaries
+        run: node scripts/fetch-npm-binaries.mjs "${GITHUB_REF_NAME}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish platform packages
+        run: |
+          npm publish npm/platforms/darwin-arm64 --access public --tag "$NPM_DIST_TAG"
+          npm publish npm/platforms/darwin-x64 --access public --tag "$NPM_DIST_TAG"
+          npm publish npm/platforms/linux-arm64 --access public --tag "$NPM_DIST_TAG"
+          npm publish npm/platforms/linux-x64 --access public --tag "$NPM_DIST_TAG"
+          npm publish npm/platforms/win32-x64 --access public --tag "$NPM_DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish launcher
+        run: npm publish npm/lazyskills --access public --tag "$NPM_DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

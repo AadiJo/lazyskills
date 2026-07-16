@@ -71,6 +71,43 @@ Then launch it:
 lazyskills
 ```
 
+Or launch the browser interface directly through npm, with no Go or Homebrew installation:
+
+```bash
+npx @aadijo/lazyskills@latest web
+```
+
+## 🖥️ Browser interface
+
+Run the web UI from the project whose skills you want to manage:
+
+```bash
+lazyskills web
+```
+
+LazySkills prints a one-time local URL, exchanges its startup token for a strict session cookie, and opens the interface on loopback. The server never accepts client-supplied paths or commands, and every mutation still uses an exact preview followed by confirmation.
+
+![LazySkills web interface with grouped skill inventory and metadata detail](docs/screenshots/web-overview.png)
+
+The interface keeps the TUI workflow: use `/` to search, `a` to cycle agents, `f` to change scope, `space` for bulk selection, `c` for actions, `u` to update, `x` to remove, and `?` for the full keymap. Installed skills can be updated, removed, enabled, or disabled in bulk; registry and source-discovery results support multi-select installs. The agent tab provides a full visibility matrix that can be scanned horizontally and vertically.
+
+![Agent visibility matrix in the LazySkills web interface](docs/screenshots/web-visibility.png)
+
+Every action shows the exact command before execution. Confirmed jobs run one at a time, stream output into the terminal drawer, reject stale scan generations, and deduplicate repeated submissions with idempotency keys. External skill and lock-file changes are watched with fsnotify and pushed to the UI over SSE, so the inventory refreshes without a manual reload.
+
+![Exact command preview before a LazySkills web action](docs/screenshots/web-action-preview.png)
+
+Useful server options:
+
+```bash
+lazyskills web --port 7777
+lazyskills web --read-only
+lazyskills web --open=false
+lazyskills web --allow-origin https://example-7777.app.github.dev
+```
+
+`--read-only` keeps scan, detail, registry search, and source discovery available while rejecting every execution. The server binds only to `127.0.0.1` and `::1`; use SSH port forwarding for another machine. Remote-development proxies must be allow-listed explicitly because they rewrite Host and Origin headers.
+
 ## 🚀 Getting started
 
 Run LazySkills from a project:

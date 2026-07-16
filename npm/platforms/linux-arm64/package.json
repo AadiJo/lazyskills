@@ -1,0 +1,23 @@
+{
+  "name": "@aadijo/lazyskills-linux-arm64",
+  "version": "0.0.1",
+  "description": "LazySkills native binary for Linux arm64",
+  "license": "MIT",
+  "homepage": "https://github.com/AadiJo/lazyskills",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AadiJo/lazyskills.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin"
+  ]
+}

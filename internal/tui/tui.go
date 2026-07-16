@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alvinunreal/lazyskills/internal/actions"
+	"github.com/alvinunreal/lazyskills/internal/discovery"
 	"github.com/alvinunreal/lazyskills/internal/display"
 	"github.com/alvinunreal/lazyskills/internal/model"
 	"github.com/alvinunreal/lazyskills/internal/registry"
@@ -41,13 +42,7 @@ const (
 	DiscoveryFailed  DiscoveryStatus = "failed"
 )
 
-type DiscoveredSkill struct {
-	Name        string
-	Description string
-	Source      string
-	SkillPath   string
-	Preview     string
-}
+type DiscoveredSkill = discovery.Skill
 
 type SourceDiscovery struct {
 	Status    DiscoveryStatus

@@ -14,20 +14,20 @@ import (
 const MaxOutputBytes = 32 * 1024
 
 type ExecSpec struct {
-	Program string
-	Args    []string
-	Cwd     string
+	Program string   `json:"program"`
+	Args    []string `json:"args,omitempty"`
+	Cwd     string   `json:"cwd,omitempty"`
 }
 
 type Result struct {
-	Program   string
-	Args      []string
-	Cwd       string
-	Stdout    string
-	Stderr    string
-	ExitCode  int
-	Err       string
-	Truncated bool
+	Program   string   `json:"program"`
+	Args      []string `json:"args,omitempty"`
+	Cwd       string   `json:"cwd,omitempty"`
+	Stdout    string   `json:"stdout,omitempty"`
+	Stderr    string   `json:"stderr,omitempty"`
+	ExitCode  int      `json:"exit_code"`
+	Err       string   `json:"error,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
 }
 
 type Runner interface {
