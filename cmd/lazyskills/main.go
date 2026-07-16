@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"os"
+	"strings"
 
 	"github.com/alvinunreal/lazyskills/internal/buildinfo"
 	"github.com/alvinunreal/lazyskills/internal/registry"
 	"github.com/alvinunreal/lazyskills/internal/scan"
 	"github.com/alvinunreal/lazyskills/internal/selfupdate"
 	"github.com/alvinunreal/lazyskills/internal/tui"
+	"github.com/alvinunreal/lazyskills/internal/webserver"
 )
 
 var (
@@ -80,6 +83,37 @@ func run(args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(res)
+	}
+	if len(args) > 0 && args[0] == "web" {
+		fs := flag.NewFlagSet("web", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		port := fs.Int("port", 0, "loopback port (default is derived from cwd)")
+		open := fs.Bool("open", true, "open the browser")
+		readOnly := fs.Bool("read-only", false, "disable all mutations")
+		var allowedOrigins stringListFlag
+		fs.Var(&allowedOrigins, "allow-origin", "allow an additional exact Origin (repeatable)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || *port < 0 || *port > 65535 {
+			return fmt.Errorf("usage: lazyskills web [--port 7777] [--open=false] [--read-only] [--allow-origin URL]")
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		portSpecified := false
+		fs.Visit(func(current *flag.Flag) {
+			if current.Name == "port" {
+				portSpecified = true
+			}
+		})
+		if *port == 0 {
+			if !portSpecified {
+				*port = defaultWebPort(cwd)
+			}
+		}
+		return webserver.Run(webserver.Config{Cwd: cwd, ReadOnly: *readOnly, AllowedOrigins: allowedOrigins, AllowPortFallback: !portSpecified}, *port, *open)
 	}
 	if len(args) > 0 && args[0] == "update" {
 		fs := flag.NewFlagSet("update", flag.ContinueOnError)
@@ -176,7 +210,7 @@ func run(args []string) error {
 			return err
 		}
 		if fs.NArg() > 0 {
-			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills scan --json [--cwd <path>] | lazyskills update [--check] [--print-command] | lazyskills find --json <query> | lazyskills version")
+			return fmt.Errorf("usage: lazyskills [--cwd <path>] | lazyskills web [options] | lazyskills scan --json [--cwd <path>] | lazyskills update [--check] [--print-command] | lazyskills find --json <query> | lazyskills version")
 		}
 		if *cwd == "" {
 			var err error
@@ -211,4 +245,21 @@ func run(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
+}
+
+type stringListFlag []string
+
+func (s *stringListFlag) String() string { return strings.Join(*s, ",") }
+func (s *stringListFlag) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("origin cannot be empty")
+	}
+	*s = append(*s, strings.TrimSuffix(value, "/"))
+	return nil
+}
+
+func defaultWebPort(cwd string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cwd))
+	return 17000 + int(h.Sum32()%20000)
 }

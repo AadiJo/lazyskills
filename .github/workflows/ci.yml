@@ -13,6 +13,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Build embedded web UI
+        run: |
+          npm ci --prefix webui
+          npm run check --prefix webui
+          npm run build --prefix webui
+          git diff --exit-code -- internal/webserver/dist
+      - name: Test npm launcher
+        run: |
+          node --test npm/lazyskills/test/launcher.test.js
+          node scripts/test-npm-pack.mjs
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -22,6 +37,8 @@ jobs:
             exit 1
           fi
       - run: go vet ./...
+      - name: Run local web security probes
+        run: go test ./internal/webserver -run '^TestSecurityProbe'
       - name: Check for dead code
         run: |
           dead=$(GOTOOLCHAIN=local go run golang.org/x/tools/cmd/deadcode@v0.46.0 -test ./...)

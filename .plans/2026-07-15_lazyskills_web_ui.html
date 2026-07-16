@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ship a local-first web UI for LazySkills, launched with npx, with full TUI parity: scan, visibility, health, safe actions, and registry install.">
+  <meta property="og:title" content="LazySkills Web UI">
+  <meta property="og:description" content="Ship a local-first web UI for LazySkills, launched with npx, with full TUI parity.">
+  <title>LazySkills Web UI</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111212;
+      --text: #f2f2f0;
+      --muted: #a8aaa8;
+      --quiet: #737674;
+      --line: #2a2c2c;
+      --line-strong: #3a3d3c;
+      --panel: #171818;
+      --panel-2: #1d1f1e;
+      --code: #181919;
+      --accent: #d7dad8;
+      --mint: #9ad6bd;
+      --amber: #d6b56d;
+      --red: #e06f5f;
+      --violet: #b7a7ff;
+      --radius: 7px;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--bg); scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: inherit; text-underline-offset: 4px; }
+    button, input, textarea, select { font: inherit; }
+    .pp-plan {
+      width: min(980px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 96px 0 112px;
+    }
+    .pp-hero {
+      max-width: 780px;
+      margin-bottom: 64px;
+    }
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(54px, 8vw, 92px);
+      font-weight: 780;
+      letter-spacing: -0.075em;
+      line-height: 0.94;
+      text-wrap: balance;
+    }
+    .pp-intro {
+      max-width: 690px;
+      margin: 28px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      letter-spacing: -0.01em;
+    }
+    .pp-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin: 20px 0 0;
+      color: var(--quiet);
+      font-size: 14px;
+    }
+    .pp-plan-shell {
+      display: grid;
+      grid-template-columns: minmax(144px, 190px) minmax(0, 1fr);
+      gap: clamp(28px, 5vw, 64px);
+      align-items: start;
+    }
+    .pp-plan-content { min-width: 0; }
+    .pp-toc {
+      position: sticky;
+      top: 86px;
+      padding-top: 2px;
+    }
+    .pp-toc__label {
+      margin: 0 0 12px;
+      color: var(--quiet);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .pp-toc nav {
+      position: relative;
+      display: grid;
+      gap: 2px;
+      padding-left: 16px;
+      border-left: 1px solid var(--line);
+    }
+    .pp-toc__marker {
+      position: absolute;
+      left: -1px;
+      top: 0;
+      width: 1px;
+      height: var(--pp-marker-height, 28px);
+      background: var(--mint);
+      transform: translateY(var(--pp-marker-y, 0));
+      transition: transform 220ms ease, height 220ms ease;
+    }
+    .pp-toc a {
+      display: block;
+      padding: 5px 0;
+      color: var(--quiet);
+      font-size: 13px;
+      line-height: 1.35;
+      text-decoration: none;
+      transition: color 160ms ease;
+    }
+    .pp-toc a:hover,
+    .pp-toc a:focus-visible,
+    .pp-toc a.is-active {
+      color: var(--text);
+      outline: 0;
+    }
+    section {
+      padding: 34px 0;
+      border-top: 1px solid var(--line);
+      scroll-margin-top: 92px;
+    }
+    h2 {
+      margin: 0 0 16px;
+      color: var(--text);
+      font-size: 22px;
+      font-weight: 720;
+      letter-spacing: -0.035em;
+      line-height: 1.12;
+    }
+    h3 {
+      margin: 26px 0 10px;
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    p {
+      max-width: 720px;
+      margin: 0;
+      color: var(--muted);
+    }
+    p + p { margin-top: 12px; }
+    ul, ol {
+      max-width: 760px;
+      margin: 14px 0 0;
+      padding-left: 22px;
+      color: var(--muted);
+    }
+    li + li { margin-top: 8px; }
+    strong { color: var(--text); font-weight: 700; }
+    code {
+      border-radius: 5px;
+      background: var(--code);
+      color: #eeeeec;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+      padding: 0.08em 0.32em;
+    }
+    pre {
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--code);
+      color: #cfd2d0;
+      font: 14px/1.7 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      white-space: pre;
+    }
+    pre code {
+      display: block;
+      min-width: max-content;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+    }
+    .tok-comment { color: #6f7672; }
+    .tok-string { color: var(--mint); }
+    .tok-keyword { color: var(--violet); }
+    .tok-number { color: var(--amber); }
+    .tok-function { color: #f0d997; }
+    .pp-table-wrap { overflow-x: auto; margin: 16px 0 0; -webkit-overflow-scrolling: touch; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    caption {
+      padding: 0 0 10px;
+      color: var(--quiet);
+      font-size: 13px;
+      text-align: left;
+    }
+    th, td {
+      padding: 11px 0;
+      border-top: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--text); font-weight: 700; }
+    th + th, td + td { padding-left: 28px; }
+    .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .pp-callout {
+      margin: 18px 0 0;
+      padding: 15px 16px;
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--muted);
+    }
+    .pp-callout p { max-width: none; }
+    .pp-callout__label {
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.02em;
+    }
+    .pp-callout.note { background: rgba(215, 218, 216, 0.06); }
+    .pp-callout.decision,
+    .pp-callout.success { background: rgba(154, 214, 189, 0.12); }
+    .pp-callout.risk { background: rgba(214, 181, 109, 0.12); }
+    .pp-callout.decision .pp-callout__label,
+    .pp-callout.success .pp-callout__label { color: var(--mint); }
+    .pp-callout.risk .pp-callout__label { color: var(--amber); }
+    .pp-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin: 18px 0 0;
+    }
+    .pp-stat {
+      padding: 15px 16px;
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .pp-stat__label {
+      margin-bottom: 7px;
+      color: var(--quiet);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .pp-stat__value {
+      color: var(--text);
+      font-size: 27px;
+      font-weight: 760;
+      letter-spacing: -0.035em;
+      line-height: 1;
+    }
+    .pp-stat__note {
+      margin-top: 6px;
+      color: var(--quiet);
+      font-size: 13px;
+    }
+    .pp-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 22px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      vertical-align: middle;
+    }
+    .pp-badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .pp-badge.success { color: var(--mint); background: rgba(154, 214, 189, 0.11); border-color: transparent; }
+    .pp-badge.warning { color: var(--amber); background: rgba(214, 181, 109, 0.11); border-color: transparent; }
+    .pp-badge.danger { color: var(--red); background: rgba(224, 111, 95, 0.11); border-color: transparent; }
+    .pp-badge.accent { color: var(--accent); background: rgba(215, 218, 216, 0.07); border-color: transparent; }
+    .pp-badge.plain::before { display: none; }
+    .pp-facts {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      margin: 16px 0 0;
+    }
+    .pp-facts dt,
+    .pp-facts dd {
+      margin: 0;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .pp-facts dt {
+      padding-right: 22px;
+      color: var(--quiet);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    .pp-facts dd {
+      color: var(--muted);
+    }
+    .pp-tool {
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .pp-tool h3 { margin-top: 0; }
+    .pp-tool__row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 9px 0;
+      border-top: 1px solid var(--line);
+    }
+    .pp-tool__row:first-of-type { border-top: 0; }
+    .pp-tool__row label {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .pp-tool__row input[type="checkbox"] { accent-color: var(--mint); }
+    .pp-tool__days { color: var(--quiet); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .pp-tool__total {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-strong);
+      color: var(--text);
+      font-weight: 700;
+    }
+    .pp-tool__actions { display: flex; align-items: baseline; gap: 10px; margin-top: 14px; }
+    .pp-tool button {
+      padding: 6px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .pp-tool button:hover { border-color: var(--quiet); }
+    .pp-diagram { margin: 18px 0 0; }
+    .pp-diagram svg { display: block; width: 100%; height: auto; }
+    @media (max-width: 780px) {
+      .pp-plan { width: min(100% - 30px, 980px); padding: 64px 0 80px; }
+      h1 { font-size: 48px; }
+      .pp-plan-shell { display: block; }
+      .pp-toc {
+        position: relative;
+        top: auto;
+        margin: 0 0 28px;
+        padding: 14px 16px;
+        border-radius: var(--radius);
+        background: var(--panel);
+      }
+      .pp-toc nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 15px;
+        padding-left: 0;
+        border-left: 0;
+      }
+      .pp-toc__marker { display: none; }
+      .pp-toc a { padding: 2px 0; }
+      table, tbody, tr, th, td { display: block; }
+      th + th, td + td { padding-left: 0; }
+      td { border-top: 0; padding-top: 0; }
+      .num { text-align: left; }
+      .pp-facts { grid-template-columns: 1fr; }
+      .pp-facts dd { border-top: 0; padding-top: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .pp-toc__marker { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="pp-plan">
+    <header class="pp-hero">
+      <h1>LazySkills Web UI</h1>
+      <p class="pp-intro">Run <code>npx lazyskills web</code> and get the full LazySkills experience in a browser: every installed skill, agent visibility, health issues, and safe preview-then-confirm actions — served from a local, token-guarded Go server embedded in the existing binary.</p>
+      <p class="pp-meta"><span>2026-07-15</span><span>/</span><span>draft</span><span>/</span><span>local .plans html</span></p>
+    </header>
+
+    <div class="pp-plan-shell">
+      <aside class="pp-toc" aria-label="Plan contents">
+        <p class="pp-toc__label">contents</p>
+        <nav>
+          <span class="pp-toc__marker" aria-hidden="true"></span>
+          <a href="#plan-links">Plan links</a>
+          <a href="#context">Context</a>
+          <a href="#recommendation">Recommendation</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#api">API surface</a>
+          <a href="#ui-guidelines">UI guidelines</a>
+          <a href="#phases">Phases &amp; end criteria</a>
+          <a href="#npx">npx distribution</a>
+          <a href="#security">Security model</a>
+          <a href="#scope-tuner">Scope tuner</a>
+          <a href="#risks">Risks</a>
+          <a href="#watch-list">Watch list</a>
+          <a href="#verification">Verification</a>
+          <a href="#open-questions">Open questions</a>
+        </nav>
+      </aside>
+
+      <div class="pp-plan-content">
+        <section id="plan-links">
+          <h2>Plan links</h2>
+          <div class="pp-table-wrap" role="region" aria-label="Plan links" tabindex="0">
+            <table>
+              <tbody>
+                <tr>
+                  <th scope="row">Local</th>
+                  <td data-postplan-local><code>.plans/2026-07-15_lazyskills_web_ui.html</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">Hosted</th>
+                  <td data-postplan-hosted><a href="https://postplan.johari-dev.com/j5784b9jz7w6ry0s4zf3t4f8hd8ajvfg">https://postplan.johari-dev.com/j5784b9jz7w6ry0s4zf3t4f8hd8ajvfg</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="context">
+          <h2>Context</h2>
+          <p>LazySkills is a Go Bubble Tea TUI that scans, installs, updates, enables/disables, and removes agent skills across ~70 AI coding agents, backed by the skills.sh registry and the external <code>skills</code> CLI. The goal is to expose the same functionality through a browser UI, launched with a single <code>npx</code> command, that keeps the minimal terminal feel.</p>
+          <p>An import-level audit of the codebase shows it is already well-positioned for this:</p>
+          <dl class="pp-facts">
+            <dt>Domain packages</dt><dd><code>scan</code>, <code>registry</code>, <code>actions</code>, <code>runner</code>, <code>locks</code>, <code>selfupdate</code>, <code>model</code>, <code>display</code> — all UI-agnostic: no bubbletea/lipgloss imports, no stdout writes, JSON tags already on core types.</dd>
+            <dt>Trapped in TUI</dt><dd>Enable/disable shelf moves, lock pruning, broken-symlink deletion, bulk exec loop (<code>internal/tui/update.go</code>) and the git-clone discovery pipeline (<code>internal/tui/discovery.go</code>, ~530 lines).</dd>
+            <dt>Execution model</dt><dd>Mutations shell out to <code>skills</code> / <code>npx skills</code> and <code>git</code>; the server must run where the skills live.</dd>
+            <dt>State</dt><dd><code>skills-lock.json</code> (project), <code>~/.agents/.skill-lock.json</code> or XDG state (global), per-agent skill dirs, clone cache.</dd>
+            <dt>Dead end</dt><dd>The <code>skills find</code> action is Interactive (runs via <code>tea.ExecProcess</code>) — unusable from a web backend; replaced by the existing <code>registry.Search</code> HTTP client.</dd>
+          </dl>
+        </section>
+
+        <section id="recommendation">
+          <h2>Recommendation</h2>
+          <div class="pp-callout decision">
+            <div class="pp-callout__label">Recommendation</div>
+            <p>Ship a <strong>local-first web mode inside the existing Go binary</strong>: <code>lazyskills web</code> serves an embedded SPA plus a JSON/SSE API on <code>127.0.0.1</code>. Distribute a thin npm wrapper package so <code>npx lazyskills web</code> downloads the right platform binary and launches it (the esbuild pattern). Tradeoff: we own binary distribution through npm in addition to brew/curl/go, in exchange for a zero-install browser entry point and one shared codebase for TUI and web.</p>
+          </div>
+          <p>A hosted web app is ruled out: everything LazySkills does is local filesystem reads/writes plus shelling out to local CLIs. Remote use still works via SSH port-forwarding the local server.</p>
+        </section>
+
+        <section id="architecture">
+          <h2>Architecture</h2>
+          <p>One process, three layers. The browser talks to a loopback-only HTTP server; the server calls the same domain packages the TUI uses; mutations are executed by the existing runner against the local system.</p>
+          <div class="pp-diagram" role="img" aria-label="Architecture diagram: browser SPA connects over token-authenticated HTTP and SSE to the lazyskills web server, which calls domain packages that operate on the filesystem, the skills CLI, git, and skills.sh">
+            <svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="13">
+              <rect x="20" y="20" width="240" height="90" rx="7" fill="#171818" stroke="#3a3d3c"/>
+              <text x="140" y="52" fill="#f2f2f0" text-anchor="middle" font-weight="bold">Browser SPA</text>
+              <text x="140" y="74" fill="#a8aaa8" text-anchor="middle">embedded via go:embed</text>
+              <text x="140" y="92" fill="#737674" text-anchor="middle">Svelte + TS, keyboard-first</text>
+
+              <line x1="260" y1="65" x2="360" y2="65" stroke="#3a3d3c"/>
+              <text x="310" y="50" fill="#9ad6bd" text-anchor="middle">HTTP + SSE</text>
+              <text x="310" y="84" fill="#737674" text-anchor="middle">bearer token</text>
+
+              <rect x="360" y="20" width="260" height="90" rx="7" fill="#171818" stroke="#3a3d3c"/>
+              <text x="490" y="52" fill="#f2f2f0" text-anchor="middle" font-weight="bold">lazyskills web</text>
+              <text x="490" y="74" fill="#a8aaa8" text-anchor="middle">internal/webserver</text>
+              <text x="490" y="92" fill="#737674" text-anchor="middle">127.0.0.1 only · job queue</text>
+
+              <line x1="490" y1="110" x2="490" y2="150" stroke="#3a3d3c"/>
+
+              <rect x="240" y="150" width="500" height="70" rx="7" fill="#171818" stroke="#3a3d3c"/>
+              <text x="490" y="178" fill="#f2f2f0" text-anchor="middle" font-weight="bold">domain packages</text>
+              <text x="490" y="200" fill="#a8aaa8" text-anchor="middle">scan · actions · skillops · discovery · registry · locks · runner</text>
+
+              <line x1="330" y1="220" x2="330" y2="260" stroke="#3a3d3c"/>
+              <line x1="490" y1="220" x2="490" y2="260" stroke="#3a3d3c"/>
+              <line x1="650" y1="220" x2="650" y2="260" stroke="#3a3d3c"/>
+
+              <rect x="240" y="260" width="180" height="50" rx="7" fill="#131414" stroke="#2a2c2c"/>
+              <text x="330" y="290" fill="#a8aaa8" text-anchor="middle">skill dirs + locks</text>
+              <rect x="430" y="260" width="150" height="50" rx="7" fill="#131414" stroke="#2a2c2c"/>
+              <text x="505" y="290" fill="#a8aaa8" text-anchor="middle">skills CLI · git</text>
+              <rect x="590" y="260" width="150" height="50" rx="7" fill="#131414" stroke="#2a2c2c"/>
+              <text x="665" y="290" fill="#a8aaa8" text-anchor="middle">skills.sh API</text>
+            </svg>
+          </div>
+          <p>The <strong>preview → confirm → execute</strong> flow the TUI already uses becomes wire protocol: the client asks for a <code>CommandPreview</code> (exact argv, <code>Mutates</code>, <code>Dangerous</code> flags), shows it to the user, then submits it for execution and streams output over SSE. Mutating jobs are serialized through a single-worker queue per project, replacing the TUI's implicit serialization.</p>
+          <p>Two properties the TUI got for free must become explicit protocol, because the web introduces multiple writers (two tabs, web + TUI, an agent installing skills mid-session):</p>
+          <ul>
+            <li><strong>Scan generations.</strong> Every scan response carries a generation number; previews embed it; execute rejects a preview built against a stale generation with 409, forcing the client to rescan and re-preview. A confirmed action can never run against a world that has changed underneath it.</li>
+            <li><strong>Idempotency keys.</strong> Execute requests carry a client-generated key; resubmission (double click, tab reconnect, SSE retry) returns the existing job instead of running the command twice.</li>
+          </ul>
+        </section>
+
+        <section id="api">
+          <h2>API surface</h2>
+          <div class="pp-table-wrap" role="region" aria-label="API endpoints" tabindex="0">
+            <table>
+              <caption>All endpoints are thin wrappers over existing or extracted domain functions</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Endpoint</th>
+                  <th scope="col">Backed by</th>
+                  <th scope="col">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><code>GET /api/scan</code></th>
+                  <td><code>scan.Run(cwd)</code></td>
+                  <td>Returns <code>model.ScanResult</code>, already JSON-tagged</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>GET /api/registry/search?q=</code></th>
+                  <td><code>registry.Search</code></td>
+                  <td>Replaces the interactive <code>skills find</code> path</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>GET /api/sources/{src}/skills</code></th>
+                  <td>extracted <code>internal/discovery</code></td>
+                  <td>Clone/cache + SKILL.md discovery in source repos</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>POST /api/actions/preview</code></th>
+                  <td><code>actions.*</code></td>
+                  <td>Returns exact command, <code>Mutates</code>/<code>Dangerous</code> flags</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>POST /api/actions/execute</code></th>
+                  <td><code>runner.OSRunner</code> + <code>internal/skillops</code></td>
+                  <td>Enqueues a job, returns job ID; supports batch</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>GET /api/jobs/{id}/events</code></th>
+                  <td>job queue</td>
+                  <td>SSE: command output, completion, fresh scan trigger</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>GET /api/update</code></th>
+                  <td><code>selfupdate.Plan</code></td>
+                  <td>Powers the update-available banner</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pp-callout note">
+            <div class="pp-callout__label">Scope guard</div>
+            <p><code>cwd</code> comes from where the server was launched, exactly like the TUI. The client never sends filesystem paths in v1 — multi-project switching is a deliberate later feature, not an accidental path-traversal surface.</p>
+          </div>
+        </section>
+
+        <section id="ui-guidelines">
+          <h2>UI guidelines</h2>
+          <p>The web UI should read as "the TUI, rendered by a browser" — not a SaaS dashboard. Users who know the terminal app should feel zero relearning cost; the browser earns its place only through better density, real tables, and mouse support.</p>
+
+          <h3>Layout</h3>
+          <ul>
+            <li><strong>Same three-region shell as the TUI:</strong> a slim top bar (project path, scope, agent filter, search), a two-pane body (left: skill list grouped by source; right: detail pane), and a one-line status footer showing counts, active filters, and key hints — the web equivalent of the TUI footer.</li>
+            <li><strong>Fixed full-viewport app layout</strong>, panes scroll internally. No page scroll, no hero, no marketing chrome, no sidebar navigation. The app is the two panes.</li>
+            <li><strong>Detail pane tabs mirror the TUI detail view:</strong> metadata, rendered SKILL.md, health issues, and the per-agent visibility matrix. The visibility matrix (skills × agents) is the one place the web should beat the TUI — render it as a real table.</li>
+            <li>Narrow viewports collapse to a single pane with the detail view pushed as an overlay.</li>
+          </ul>
+
+          <h3>Visual language</h3>
+          <ul>
+            <li><strong>Dark only.</strong> Near-black background, panels one step lighter, 1px borders. No shadows, no gradients, no glassmorphism, no card grids, no icons beyond a few status glyphs (<code>●</code> <code>✓</code> <code>✗</code> <code>⚠</code>).</li>
+            <li><strong>Monospace where the TUI is monospace:</strong> skill names, paths, commands, lock data, agent IDs. A UI sans face only for descriptions and prose.</li>
+            <li><strong>One accent color</strong> (the brand cyan, <code>#3dbbff</code>) reserved for selection and focus, plus semantic green/amber/red strictly for health and visibility states. Everything else is grayscale.</li>
+            <li><strong>Compact density:</strong> 13–14px base, list rows ~28px tall, tabular numerals. Closer to lazygit than to Linear.</li>
+            <li>Empty and loading states are plain text lines ("scanning…", "no skills match"), not spinners or illustrations.</li>
+          </ul>
+
+          <h3>Interaction</h3>
+          <ul>
+            <li><strong>Keyboard-first, same keymap as the TUI:</strong> <code>/</code> search, <code>a</code> cycle agent filter, <code>f</code> scope toggle, <code>enter</code> details, <code>c</code> actions, <code>space</code> select, <code>u</code> update, <code>x</code> remove, <code>?</code> keymap overlay. Mouse is additive, never required, and every mouse affordance shows its key hint.</li>
+            <li><strong>Actions always go preview → confirm:</strong> the action modal shows the exact command that will run, verbatim, in a code block — identical to the TUI's command preview. Destructive actions get a distinct red confirm.</li>
+            <li><strong>Command output streams live</strong> into a bottom drawer styled like a terminal (monospace, no wrapping tricks), then the list auto-refreshes from a new scan.</li>
+            <li>Bulk selection uses <code>space</code> + checkboxes; the footer shows the pending selection count and available bulk actions.</li>
+            <li>Rendered SKILL.md is sanitized before injection — skill content is untrusted third-party input.</li>
+          </ul>
+        </section>
+
+        <section id="phases">
+          <h2>Phases &amp; end criteria</h2>
+
+          <h3>Phase 0 — Domain extraction <span class="pp-badge accent plain">prerequisite</span></h3>
+          <p>Hoist the business logic currently trapped in the TUI into UI-agnostic packages: enable/disable shelf moves, lock pruning, broken-symlink deletion, post-remove lock cleanup, and the bulk-exec loop into a new <code>internal/skillops</code>; the git clone/cache/discovery pipeline from <code>internal/tui/discovery.go</code> into <code>internal/discovery</code>. Rewire the TUI to call them. Pure behavior-preserving refactor.</p>
+          <div class="pp-callout success">
+            <div class="pp-callout__label">Done when</div>
+            <ul>
+              <li><code>internal/skillops</code> and <code>internal/discovery</code> exist with unit tests; neither imports bubbletea/lipgloss.</li>
+              <li><code>internal/tui</code> contains no direct <code>os.Rename</code>/<code>os.Remove</code> mutation logic and no <code>git</code> invocation code.</li>
+              <li><code>go build ./... &amp;&amp; go test ./...</code> green; <code>go vet</code> clean.</li>
+              <li>Manual TUI smoke pass unchanged: scan, disable/enable, prune lock, delete broken symlink, single + bulk remove, source discovery.</li>
+            </ul>
+          </div>
+
+          <h3>Phase 1 — HTTP API + <code>lazyskills web</code> subcommand</h3>
+          <p>New <code>internal/webserver</code> package and <code>web</code> subcommand: <code>lazyskills web [--port 7777] [--open] [--read-only]</code>. Implements the API table above, the single-worker mutation job queue with scan generations and idempotency keys, SSE job streaming, and the full security model (loopback bind, startup token, Origin/Host checks).</p>
+          <p>This phase also owns the <strong>child-process policy</strong>. In the TUI, when <code>skills</code>/<code>npx</code> prompts ("Ok to proceed? (y)", first-run questions), the user answers; over SSE there is no stdin and the job would hang forever. Jobs therefore run with stdin closed, every available non-interactive/<code>--yes</code> flag set, a hard timeout with process-group kill, and a stall detector that surfaces "this command appears to be waiting for input" instead of silence. First-run <code>npx skills</code> package downloads are long and noisy — stream them honestly with a "downloading dependency" state rather than looking frozen.</p>
+          <div class="pp-callout success">
+            <div class="pp-callout__label">Done when</div>
+            <ul>
+              <li>Every endpoint in the API table responds correctly via <code>curl</code> with the token; handler-level integration tests cover scan, preview, execute, and job streaming.</li>
+              <li>Requests without the token get 401; requests with a non-localhost <code>Origin</code> or <code>Host</code> header get 403 (unless explicitly allow-listed, see security model); <code>ss -tlnp</code> confirms the listener is bound to loopback only, and the printed URL connects whether the browser resolves localhost to <code>127.0.0.1</code> or <code>::1</code>.</li>
+              <li>Two concurrent execute requests are provably serialized (second waits in queue), and job output arrives over SSE followed by a completion event.</li>
+              <li>A test fixture command that prompts on stdin does not hang: the job fails within the timeout with a "waiting for input" diagnosis in the SSE stream. Killing a job kills its whole process group.</li>
+              <li>Executing a preview built against a stale scan generation returns 409; the integration test mutates a skill dir between preview and execute to prove it.</li>
+              <li>Resubmitting an execute request with the same idempotency key returns the original job ID; the command runs exactly once.</li>
+              <li><code>--read-only</code> rejects all mutating endpoints with 403.</li>
+            </ul>
+          </div>
+
+          <h3>Phase 2 — Embedded SPA with TUI parity</h3>
+          <p>Svelte + TypeScript + Tailwind SPA implementing the UI guidelines above, built by Vite, embedded with <code>go:embed</code>, served by the Phase 1 server. Feature parity with the TUI is the bar.</p>
+          <div class="pp-callout success">
+            <div class="pp-callout__label">Done when — parity checklist all green</div>
+            <ul>
+              <li>List grouped by source; search (<code>/</code>); agent filter cycle (<code>a</code>); project/global/all scope toggle (<code>f</code>); detail view with metadata, rendered + sanitized SKILL.md, health issues, and the agent visibility matrix.</li>
+              <li>All actions work end-to-end with preview → confirm → streamed output → auto-rescan: install (registry search + source discovery), reinstall/update, remove, enable/disable, prune locks, delete broken symlink, single and bulk.</li>
+              <li>Update-available banner from <code>/api/update</code>; <code>?</code> keymap overlay; all TUI keybindings functional.</li>
+              <li>A single <code>go build</code> binary serves the complete UI with zero external files or network assets (verified offline).</li>
+              <li>Sanitization test passes against a hostile SKILL.md fixture (script tags, event handlers, <code>javascript:</code> URLs stripped).</li>
+            </ul>
+          </div>
+
+          <h3>Phase 3 — npx distribution</h3>
+          <p>Publish an npm wrapper so <code>npx lazyskills web</code> works with nothing preinstalled: a tiny launcher package plus per-platform <code>optionalDependencies</code> packages carrying the Go binary (the esbuild pattern), wired into the existing release CI.</p>
+          <div class="pp-callout success">
+            <div class="pp-callout__label">Done when</div>
+            <ul>
+              <li><code>npx lazyskills@latest web</code> launches the UI and opens the browser on macOS (arm64 + x64), Linux x64, and Windows x64, on machines without Go or brew.</li>
+              <li>The launcher resolves the platform package, falls back to a checksum-verified download from GitHub releases if optionalDependencies were skipped, and fails with a clear message on unsupported platforms.</li>
+              <li>npm publish is automated in release CI; npm package version and GitHub release tag are always identical (CI asserts this).</li>
+              <li>README documents the npx path alongside brew/curl/go.</li>
+            </ul>
+          </div>
+
+          <h3>Phase 4 — Polish &amp; parity extras</h3>
+          <p>Quality-of-life work once the core ships: fsnotify-driven live refresh pushed over SSE, copy-path buttons replacing "open in editor", demo media, and any parity gaps found in real use.</p>
+          <div class="pp-callout success">
+            <div class="pp-callout__label">Done when</div>
+            <ul>
+              <li>External changes to skill dirs appear in the UI within 2s without manual refresh (if fsnotify is in scope per the tuner below).</li>
+              <li>README web section with screenshot/gif; <code>--read-only</code> documented.</li>
+              <li>No open parity issues labeled <code>web-parity</code> in the tracker.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section id="npx">
+          <h2>npx distribution detail</h2>
+          <p>The npm side is deliberately dumb — all product code stays in Go. Package layout:</p>
+          <pre><code class="language-sh"># launcher (what users type)
+lazyskills                      # bin: launcher.js — resolve platform pkg, spawn binary, pass args through
+
+# per-platform binary packages (optionalDependencies of the launcher)
+@lazyskills/darwin-arm64
+@lazyskills/darwin-x64
+@lazyskills/linux-x64
+@lazyskills/linux-arm64
+@lazyskills/win32-x64</code></pre>
+          <p>The launcher checks <code>process.platform</code>/<code>process.arch</code>, finds the installed platform package, and spawns the binary with the user's argv — so <code>npx lazyskills web</code>, <code>npx lazyskills find --json "browser automation"</code>, and even the plain TUI all work through npm. If the platform package is missing (some package managers skip optionalDependencies), it downloads the matching release artifact from GitHub and verifies the published SHA-256 before executing.</p>
+          <div class="pp-callout risk">
+            <div class="pp-callout__label">Reserve the name now</div>
+            <p>Name-squatting is a race that starts the moment this plan is public. Publish a stub <code>lazyskills</code> package (and the <code>@lazyskills</code> org scope) immediately — before any announcement — not "before Phase 3". If the unscoped name is already taken, fall back to the scope for the launcher too (<code>npx @lazyskills/cli web</code>).</p>
+          </div>
+        </section>
+
+        <section id="security">
+          <h2>Security model</h2>
+          <p>This API executes shell commands; an exposed endpoint is remote code execution. These are non-negotiable and land in Phase 1, not as a hardening pass later:</p>
+          <ul>
+            <li><strong>Loopback bind only.</strong> Listen on both loopbacks (<code>127.0.0.1</code> and <code>::1</code>) — browsers that resolve <code>localhost</code> to <code>::1</code> otherwise get connection refused — and print the literal-IP URL. No flag to bind wider in v1; remote use is SSH port-forwarding.</li>
+            <li><strong>Startup token, then cookie.</strong> Random per-launch token embedded in the URL the CLI prints and opens; on first load the SPA exchanges it for an HttpOnly SameSite=Strict session cookie and strips the token from the URL, so it doesn't live in browser history for the lifetime of a long-running server. All requests including SSE require the cookie (or the token, for curl use).</li>
+            <li><strong>DNS-rebinding defense, with a deliberate remote-dev stance.</strong> Reject any request whose <code>Host</code> isn't localhost and any state-changing request whose <code>Origin</code> isn't the server's own origin. This intentionally breaks Codespaces / VS Code port forwarding / devcontainer proxies, which rewrite both headers — for those users, provide an explicit, loud escape hatch (<code>--allow-origin https://xyz-7777.app.github.dev</code>) rather than loosening the default. Document this in the README; it will otherwise surface as mystery 403 bug reports from remote-dev users.</li>
+            <li><strong>No client-supplied paths or argv.</strong> The client sends action identifiers and skill IDs; the server rebuilds commands through <code>actions.*</code> with its existing sanitization. Execute accepts a preview hash, not a command string.</li>
+            <li><strong>Untrusted content.</strong> SKILL.md and registry metadata are sanitized before rendering (XSS), reusing the existing <code>compat</code> sanitizers server-side plus DOM sanitization client-side.</li>
+            <li><strong><code>--read-only</code></strong> for cautious or demo use: scan and search work, every mutation returns 403.</li>
+          </ul>
+        </section>
+
+        <section id="scope-tuner" class="pp-tool" aria-labelledby="scope-tuner-heading">
+          <h3 id="scope-tuner-heading">Scope tuner</h3>
+          <p>The four core phases are fixed. Toggle the optional items to see the effort estimate move, then copy the chosen scope back into the conversation.</p>
+          <div id="tuner-rows">
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked disabled data-days="3" data-name="Phase 0 — domain extraction"> Phase 0 — domain extraction <span class="pp-badge plain accent">fixed</span></label>
+              <span class="pp-tool__days">3 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked disabled data-days="4" data-name="Phase 1 — HTTP API + security"> Phase 1 — HTTP API + security <span class="pp-badge plain accent">fixed</span></label>
+              <span class="pp-tool__days">4 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked disabled data-days="6" data-name="Phase 2 — SPA with TUI parity"> Phase 2 — SPA with TUI parity <span class="pp-badge plain accent">fixed</span></label>
+              <span class="pp-tool__days">6 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked disabled data-days="2" data-name="Phase 3 — npx distribution (mac/linux)"> Phase 3 — npx distribution (mac/linux) <span class="pp-badge plain accent">fixed</span></label>
+              <span class="pp-tool__days">2 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked data-days="1" data-name="Windows support in npx launcher"> Windows support in npx launcher</label>
+              <span class="pp-tool__days">1 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" checked data-days="1" data-name="fsnotify live refresh over SSE"> fsnotify live refresh over SSE</label>
+              <span class="pp-tool__days">1 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" data-days="2" data-name="Multi-project directory switcher"> Multi-project directory switcher</label>
+              <span class="pp-tool__days">2 d</span>
+            </div>
+            <div class="pp-tool__row">
+              <label><input type="checkbox" data-days="1" data-name="Mobile/narrow single-pane layout"> Mobile/narrow single-pane layout</label>
+              <span class="pp-tool__days">1 d</span>
+            </div>
+          </div>
+          <div class="pp-tool__total">
+            <span>Estimated total</span>
+            <span id="tuner-total">17 days</span>
+          </div>
+          <div class="pp-tool__actions">
+            <button type="button" id="tuner-copy">Copy scope as Markdown</button>
+            <span class="pp-tool__days" id="tuner-copied" hidden>copied</span>
+          </div>
+        </section>
+
+        <section id="risks">
+          <h2>Risks</h2>
+          <div class="pp-table-wrap" role="region" aria-label="Risks" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Risk</th>
+                  <th scope="col">Severity</th>
+                  <th scope="col">Mitigation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">API exposes command execution beyond localhost</th>
+                  <td><span class="pp-badge danger">high</span></td>
+                  <td>Loopback bind + token + Origin/Host checks land in Phase 1 with explicit end criteria; no wide-bind flag exists.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Phase 0 refactor silently changes TUI behavior</th>
+                  <td><span class="pp-badge warning">medium</span></td>
+                  <td>Behavior-preserving diff discipline, existing test suite, scripted manual smoke pass in the end criteria.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Malicious SKILL.md achieves XSS in the browser</th>
+                  <td><span class="pp-badge warning">medium</span></td>
+                  <td>Server-side sanitization + client DOM sanitizer, hostile-fixture test required by Phase 2 end criteria.</td>
+                </tr>
+                <tr>
+                  <th scope="row">npm name unavailable / npx cold-start feels slow</th>
+                  <td><span class="pp-badge warning">medium</span></td>
+                  <td>Reserve the npm name/scope with a stub package now, before announcing; platform packages make cold-start a single small binary fetch; local npx cache makes reruns instant.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Server env ≠ user shell env (agents/paths differ)</th>
+                  <td><span class="pp-badge plain">low</span></td>
+                  <td>Launcher spawns the binary from the user's shell, inheriting env exactly like the TUI does today.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="watch-list">
+          <h2>Watch list</h2>
+          <p>Known unknowns that don't block a phase but will bite if forgotten. Each has a cheap mitigation worth doing when its phase lands.</p>
+          <div class="pp-table-wrap" role="region" aria-label="Watch list" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Lands in</th>
+                  <th scope="col">Mitigation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Browser/extension keymap conflicts: <code>/</code> is Firefox quick-find, <code>space</code> scrolls, Vimium captures <code>/</code> <code>f</code> <code>x</code> before the app sees them</th>
+                  <td>Phase 2</td>
+                  <td>Strict focus management, <code>preventDefault</code> inside the app shell, and a visible mouse path for every key action. Budget real time; parity checklists pass while the feel is wrong.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Long-lived servers drift: cwd deleted, binary upgraded underneath, laptop sleep kills SSE, two projects fight over one port</th>
+                  <td>Phases 1–2</td>
+                  <td>Show the project path prominently in the top bar; SSE heartbeat + auto-reconnect with job replay; derive the default port from a hash of the cwd with fallback to ephemeral.</td>
+                </tr>
+                <tr>
+                  <th scope="row">WSL2: <code>xdg-open</code> doesn't reach the Windows browser; scans see Linux-side agent configs only</th>
+                  <td>Phases 1, 4</td>
+                  <td><code>--open</code> tries <code>wslview</code>/<code>powershell.exe Start-Process</code> when WSL is detected; document that Windows-side agent dirs are out of scope (or a later feature).</td>
+                </tr>
+                <tr>
+                  <th scope="row">Two-surface maintenance tax: every future feature needs TUI + web implementations, and contributors are Go/TUI people</th>
+                  <td>governance</td>
+                  <td>Decide upfront: web is either first-class (features block until both surfaces ship) or best-effort (web may lag, tracked via <code>web-parity</code> label). Undecided = silent rot.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="verification">
+          <h2>Verification</h2>
+          <p>Beyond per-phase end criteria, the release gate for the first web version:</p>
+          <ul>
+            <li><strong>Cold-machine test:</strong> on a VM with only Node installed, <code>npx lazyskills web</code> opens the browser and a full install→update→disable→remove cycle succeeds against a scratch project.</li>
+            <li><strong>Security probe script</strong> in CI: tokenless request, spoofed Origin, spoofed Host, non-loopback connection attempt, and a path-traversal payload against every endpoint — all rejected.</li>
+            <li><strong>Parity audit:</strong> walk the README key table (<code>/ a f enter c n space u x ?</code>) in the web UI; every row must have a working equivalent.</li>
+            <li><strong>TUI regression:</strong> full existing test suite plus manual smoke on the TUI, confirming the web work changed nothing for terminal users.</li>
+          </ul>
+        </section>
+
+        <section id="open-questions">
+          <h2>Open questions</h2>
+          <ul>
+            <li>Is the <code>lazyskills</code> npm package name available, and do we want the unscoped name or the <code>@lazyskills</code> scope? (Blocks Phase 3 naming only.)</li>
+            <li>Svelte is proposed for bundle size and simplicity — any preference for React for contributor familiarity?</li>
+            <li>Should <code>lazyskills web</code> also be advertised from inside the TUI (a footer hint), or stay a README-level feature at launch?</li>
+            <li>Default port: fixed (memorable, e.g. 7777) or ephemeral (collision-free)? Proposal: cwd-hash-derived default with automatic fallback to ephemeral.</li>
+            <li>Parity governance: is the web UI a first-class surface (new features block until both TUI and web ship) or best-effort (web may lag behind a <code>web-parity</code> label)? This should be decided and written down before Phase 2 starts.</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script>
+    (() => {
+      const escapeHtml = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+      const tokenRe = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:await|async|break|case|catch|class|const|continue|default|else|export|extends|finally|for|from|function|if|import|interface|let|new|return|switch|throw|try|type|var|while)\b|\b\d+(?:\.\d+)?\b)/g;
+      const classify = (token) => {
+        if (/^\/\//.test(token) || /^\/\*/.test(token)) return "tok-comment";
+        if (/^["']/.test(token)) return "tok-string";
+        if (/^\d/.test(token)) return "tok-number";
+        return "tok-keyword";
+      };
+      document.querySelectorAll("pre code").forEach((block) => {
+        if (block.dataset.highlighted === "true") return;
+        const source = block.textContent || "";
+        let html = "";
+        let last = 0;
+        for (const match of source.matchAll(tokenRe)) {
+          const token = match[0];
+          const index = match.index || 0;
+          html += escapeHtml(source.slice(last, index));
+          html += '<span class="' + classify(token) + '">' + escapeHtml(token) + "</span>";
+          last = index + token.length;
+        }
+        html += escapeHtml(source.slice(last));
+        block.innerHTML = html;
+        block.dataset.highlighted = "true";
+      });
+
+      const toc = document.querySelector(".pp-toc");
+      const links = [...document.querySelectorAll(".pp-toc a[href^='#']")];
+      const sections = links.map((link) => document.querySelector(link.getAttribute("href"))).filter(Boolean);
+      const setActive = (section) => {
+        const link = links.find((item) => item.getAttribute("href") === "#" + section.id);
+        if (!link || !toc) return;
+        links.forEach((item) => item.classList.toggle("is-active", item === link));
+        toc.style.setProperty("--pp-marker-y", link.offsetTop + "px");
+        toc.style.setProperty("--pp-marker-height", link.offsetHeight + "px");
+      };
+      if (sections.length) {
+        setActive(sections[0]);
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (visible) setActive(visible.target);
+        }, { rootMargin: "-24% 0px -58% 0px", threshold: [0.1, 0.4, 0.7] });
+        sections.forEach((section) => observer.observe(section));
+        window.addEventListener("resize", () => {
+          const active = document.querySelector(".pp-toc a.is-active");
+          const section = active ? document.querySelector(active.getAttribute("href")) : sections[0];
+          if (section) setActive(section);
+        });
+      }
+
+      // Scope tuner
+      const boxes = [...document.querySelectorAll('#tuner-rows input[type="checkbox"]')];
+      const total = document.getElementById("tuner-total");
+      const update = () => {
+        const days = boxes.filter((b) => b.checked).reduce((sum, b) => sum + Number(b.dataset.days || 0), 0);
+        if (total) total.textContent = days + " days";
+      };
+      boxes.forEach((b) => b.addEventListener("change", update));
+      update();
+
+      const copyBtn = document.getElementById("tuner-copy");
+      const copied = document.getElementById("tuner-copied");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", async () => {
+          const lines = boxes.map((b) => `- [${b.checked ? "x" : " "}] ${b.dataset.name} (${b.dataset.days}d)`);
+          const days = boxes.filter((b) => b.checked).reduce((sum, b) => sum + Number(b.dataset.days || 0), 0);
+          const md = `## LazySkills Web UI — selected scope\n\n${lines.join("\n")}\n\n**Estimated total: ${days} days**\n`;
+          try {
+            await navigator.clipboard.writeText(md);
+            if (copied) { copied.hidden = false; setTimeout(() => { copied.hidden = true; }, 1600); }
+          } catch {
+            window.prompt("Copy scope:", md);
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

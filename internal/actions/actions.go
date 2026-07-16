@@ -13,28 +13,28 @@ import (
 )
 
 type CommandPreview struct {
-	ID              string
-	Title           string
-	Program         string
-	Args            []string
-	Exec            ExecSpec
-	Command         string
-	Description     string
-	Mutates         bool
-	RequiresConfirm bool
-	Dangerous       bool
-	ConfirmValue    string
-	Available       bool
-	Reason          string
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Program         string   `json:"program,omitempty"`
+	Args            []string `json:"args,omitempty"`
+	Exec            ExecSpec `json:"-"`
+	Command         string   `json:"command"`
+	Description     string   `json:"description"`
+	Mutates         bool     `json:"mutates"`
+	RequiresConfirm bool     `json:"requires_confirm"`
+	Dangerous       bool     `json:"dangerous"`
+	ConfirmValue    string   `json:"confirm_value,omitempty"`
+	Available       bool     `json:"available"`
+	Reason          string   `json:"reason,omitempty"`
 }
 
 type ExecSpec struct {
-	Program     string
-	Args        []string
-	Batch       []ExecSpec
-	Cwd         string
-	Interactive bool
-	Internal    string
+	Program     string     `json:"program,omitempty"`
+	Args        []string   `json:"args,omitempty"`
+	Batch       []ExecSpec `json:"batch,omitempty"`
+	Cwd         string     `json:"cwd,omitempty"`
+	Interactive bool       `json:"interactive,omitempty"`
+	Internal    string     `json:"internal,omitempty"`
 }
 
 type SkillsResolver func() (program string, baseArgs []string)
@@ -317,6 +317,127 @@ func ForSkillWithResolver(sk *model.Skill, resolve SkillsResolver) []CommandPrev
 	}
 	if hasBrokenSymlink(sk) {
 		previews = append(previews, deleteBrokenSymlinkPreview(sk))
+	}
+	return previews
+}
+
+// ToggleForSkill builds shelf enable/disable previews for one skill. When
+// agent is empty, it targets all observed paths in the skill's own scope.
+func ToggleForSkill(sk *model.Skill, agent, agentLabel string) []CommandPreview {
+	if sk == nil {
+		return nil
+	}
+	if agentLabel == "" {
+		agentLabel = agent
+	}
+	var active []string
+	var disabled []string
+	seenActive, seenDisabled := map[string]bool{}, map[string]bool{}
+	for _, observed := range sk.ObservedPaths {
+		if agent != "" && observed.Agent != agent {
+			continue
+		}
+		if agent == "" && observed.Scope != sk.Scope {
+			continue
+		}
+		if agent != "" {
+			sharing := 0
+			for _, other := range sk.ObservedPaths {
+				if other.Path == observed.Path {
+					sharing++
+				}
+			}
+			if sharing > 1 {
+				continue
+			}
+		}
+		if observed.Status == model.StatusDisabled {
+			if !seenDisabled[observed.Path] {
+				seenDisabled[observed.Path] = true
+				disabled = append(disabled, observed.Path, observed.TargetPath)
+			}
+		} else if !seenActive[observed.Path] {
+			seenActive[observed.Path] = true
+			active = append(active, observed.Path)
+		}
+	}
+	var previews []CommandPreview
+	if len(active) > 0 {
+		title := fmt.Sprintf("Disable skill (scope: %s)", sk.Scope)
+		description := fmt.Sprintf("Disable this skill across all agent roots in the %s scope.", sk.Scope)
+		command := fmt.Sprintf("disable skill (scope: %s)", sk.Scope)
+		if agent != "" {
+			title = "Disable skill for agent " + agentLabel
+			description = "Disable this skill for " + agentLabel + " by moving it to the disabled shelf."
+			command = "disable skill for agent " + agentLabel
+		}
+		previews = append(previews, CommandPreview{ID: "disable_skill", Title: title, Description: description, Command: command, Exec: ExecSpec{Internal: "disable_skill", Args: active}, Mutates: true, Available: true})
+	}
+	if len(disabled) > 0 {
+		title := fmt.Sprintf("Enable skill (scope: %s)", sk.Scope)
+		description := fmt.Sprintf("Enable this skill across all agent roots in the %s scope.", sk.Scope)
+		command := fmt.Sprintf("enable skill (scope: %s)", sk.Scope)
+		if agent != "" {
+			title = "Enable skill for agent " + agentLabel
+			description = "Enable this skill for " + agentLabel + " by moving it back from the disabled shelf."
+			command = "enable skill for agent " + agentLabel
+		}
+		previews = append(previews, CommandPreview{ID: "enable_skill", Title: title, Description: description, Command: command, Exec: ExecSpec{Internal: "enable_skill", Args: disabled}, Mutates: true, Available: true})
+	}
+	return previews
+}
+
+// ToggleForSkills combines validated shelf operations for a selected set.
+func ToggleForSkills(skills []*model.Skill, agent, agentLabel string) []CommandPreview {
+	if len(skills) == 0 {
+		return nil
+	}
+	argsByID := map[string][]string{"disable_skill": {}, "enable_skill": {}}
+	seenByID := map[string]map[string]bool{"disable_skill": {}, "enable_skill": {}}
+	for _, skill := range skills {
+		for _, preview := range ToggleForSkill(skill, agent, agentLabel) {
+			if preview.ID == "enable_skill" {
+				for i := 0; i+1 < len(preview.Exec.Args); i += 2 {
+					key := preview.Exec.Args[i] + "\x00" + preview.Exec.Args[i+1]
+					if !seenByID[preview.ID][key] {
+						seenByID[preview.ID][key] = true
+						argsByID[preview.ID] = append(argsByID[preview.ID], preview.Exec.Args[i], preview.Exec.Args[i+1])
+					}
+				}
+				continue
+			}
+			for _, arg := range preview.Exec.Args {
+				if !seenByID[preview.ID][arg] {
+					seenByID[preview.ID][arg] = true
+					argsByID[preview.ID] = append(argsByID[preview.ID], arg)
+				}
+			}
+		}
+	}
+	var previews []CommandPreview
+	for _, id := range []string{"disable_skill", "enable_skill"} {
+		args := argsByID[id]
+		if len(args) == 0 {
+			continue
+		}
+		verb := "Disable"
+		internal := "disable_skill"
+		if id == "enable_skill" {
+			verb, internal = "Enable", "enable_skill"
+		}
+		target := fmt.Sprintf("%d selected skills", len(skills))
+		if agent != "" {
+			target += " for " + agentLabel
+		}
+		previews = append(previews, CommandPreview{
+			ID:          "bulk_" + id,
+			Title:       verb + " " + target,
+			Description: verb + " the selected skill paths using the disabled shelf.",
+			Command:     strings.ToLower(verb) + " " + target,
+			Exec:        ExecSpec{Internal: internal, Args: args},
+			Mutates:     true,
+			Available:   true,
+		})
 	}
 	return previews
 }
